@@ -1,4 +1,4 @@
-# Copyright (c) HorstHorstmann
+# Copyright (c) mrmilbe
 
 """Rekordbox-style 3-band waveform analysis lab."""
 

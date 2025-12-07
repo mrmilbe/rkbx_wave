@@ -1,4 +1,4 @@
-# Copyright (c) HorstHorstmann
+# Copyright (c) mrmilbe
 
 """Antialiasing cache for waveform display.
 

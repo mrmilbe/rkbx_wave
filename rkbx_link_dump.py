@@ -1,4 +1,4 @@
-# Copyright (c) HorstHorstmann
+# Copyright (c) mrmilbe
 
 #!/usr/bin/env python3
 """Dump every OSC message from Rekordbox Link (debug helper)."""

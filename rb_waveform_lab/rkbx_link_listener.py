@@ -1,4 +1,4 @@
-# Copyright (c) HorstHorstmann
+# Copyright (c) mrmilbe
 
 """Rekordbox Link OSC listener utilities.
 

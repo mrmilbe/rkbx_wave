@@ -1,4 +1,4 @@
-# Copyright (c) HorstHorstmann
+# Copyright (c) mrmilbe
 
 """Interactive tuning GUI for rb_waveform_lab.
 

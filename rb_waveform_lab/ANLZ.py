@@ -1,4 +1,4 @@
-# Copyright (c) HorstHorstmann
+# Copyright (c) mrmilbe
 
 """Minimal Rekordbox ANLZ helpers for PWV7 waveform extraction."""
 

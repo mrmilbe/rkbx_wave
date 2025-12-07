@@ -1,4 +1,4 @@
-# Copyright (c) HorstHorstmann
+# Copyright (c) mrmilbe
 
 """WaveformSync GUI - Dual deck display for Rekordbox Link.
 

@@ -1,4 +1,4 @@
-# Copyright (c) HorstHorstmann
+# Copyright (c) mrmilbe
 
 """GUI for tweaking Rekordbox PWV waveforms coming directly from .2EX/.EXT files.
 
