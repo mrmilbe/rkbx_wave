@@ -24,6 +24,7 @@ Real-time waveform display for Rekordbox DJ with zoom levels beyond the standard
 - enable all RB versions
 - add 4 deck support
 - add cue & loop markers
+- keyboard shortcuts & midi controller support for zoom 
 - ....
 
 
