@@ -29,6 +29,7 @@ Real-time waveform display for Rekordbox DJ with zoom levels beyond the standard
 - **Windows 10/11** (sorry apple folks :/)
 - **Python 3.9+**
 - **Rekordbox 7.2.2** 
+([click on "I want to use previous rekordbox ver. 7." in the FAQ](https://rekordbox.com/en/support/faq/v7/))
 
 ## Installation
 
