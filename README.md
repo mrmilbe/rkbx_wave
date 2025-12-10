@@ -26,11 +26,34 @@ Real-time waveform display for Rekordbox DJ with zoom levels beyond the standard
 
 ### From GitHub Releases (Recommended)
 
-1. Install with pip:
+1. (Optional but Highly Recommended) Use a Virtual Environment
+
+To avoid conflicts with other Python packages, it is best to install rkbx_wave in a fresh virtual environment (venv):
+
+**Create and activate a venv:**
+
+Windows PowerShell:
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+
+Windows Command Prompt:
+```cmd
+python -m venv venv
+venv\Scripts\activate.bat
+```
+
+To deactivate later, just run:
+```
+deactivate
+```
+
+2. Install with pip:
    ```
    pip install https://github.com/mrmilbe/rkbx_wave/releases/download/pre-release/rkbx_wave-1.0.0-py3-none-any.whl
    ```
-2. Run:
+3. Run:
    ```
    rkbx_wave
    ```
