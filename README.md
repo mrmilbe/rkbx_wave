@@ -112,7 +112,7 @@ Settings are stored in `%APPDATA%\rkbx_wave\`:
 | `default_config.json` | Default settings (copied on first run) |
 | `last_config.txt` | Path to last loaded config file |
 
-You can safely edit `default_config.json` to change startup defaults.
+I recomend not to change `default_config.json`, you can save a new config in a different file and it will be loaded on startup.
 
 ## Troubleshooting
 
@@ -122,7 +122,7 @@ The executable should be installed automatically. If missing, reinstall the pack
 ### No waveforms showing
 - Ensure Rekordbox is running with tracks loaded
 - Check that rkbx_link.exe is not blocked by firewall/antivirus
-- Verify Rekordbox version is 7.x
+- Verify Rekordbox version is 7.2.2
 
 ### High CPU usage
 - Switch to **Speed** render mode
