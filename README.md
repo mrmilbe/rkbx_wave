@@ -10,15 +10,23 @@ Real-time waveform display for Rekordbox DJ with zoom levels beyond the standard
 
 - Dual deck waveform display synced with Rekordbox in real-time
 - Configurable zoom levels from 16 to 256 seconds
-- Three render modes: Speed, Default, Quality
 - Per-band gain control (Low/Mid/High)
 - Beat grid overlay
-- Overview mode with adjustable smoothing
+- RB style overview mode with adjustable smoothing
+- Stacked view with isolated bands
 - Configuration save/load with persistent settings
+- Tuning / customization of waveform rendering
+
+## TBD
+- enable all RB versions
+- add 4 deck support
+- add cue & loop markers
+- ....
+
 
 ## Requirements
 
-- **Windows 10/11** (required - uses rkbx_link.exe for Rekordbox communication)
+- **Windows 10/11** (sorry apple folks :/)
 - **Python 3.9+**
 - **Rekordbox 7.2.2** 
 
@@ -28,20 +36,19 @@ Real-time waveform display for Rekordbox DJ with zoom levels beyond the standard
 
 1. (Optional but Highly Recommended) Use a Virtual Environment
 
-To avoid conflicts with other Python packages, it is best to install rkbx_wave in a fresh virtual environment (venv):
 
 **Create and activate a venv:**
 
 Windows PowerShell:
 ```powershell
-python -m venv venv
-.\venv\Scripts\Activate.ps1
+python -m venv venv_rkbx
+.\venv_rkbx\Scripts\Activate.ps1
 ```
 
 Windows Command Prompt:
 ```cmd
-python -m venv venv
-venv\Scripts\activate.bat
+python -m venv venv_rkbx
+venv_rkbx\Scripts\activate.bat
 ```
 
 To deactivate later, just run:
@@ -49,7 +56,7 @@ To deactivate later, just run:
 deactivate
 ```
 
-2. Install with pip:
+2. Install with pip ( inside your venv):
    ```
    pip install https://github.com/mrmilbe/rkbx_wave/releases/download/pre-release/rkbx_wave-1.0.0-py3-none-any.whl
    ```

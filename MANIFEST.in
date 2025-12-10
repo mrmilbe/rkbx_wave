@@ -1,8 +1,10 @@
+#pip install --upgrade build setuptools wheel
+#python -m build --wheel
+
 # Include essential files
 include LICENSE
 include README.md
 include default_config.json
-include requirements.txt
 
 # Include rb_waveform_core package
 recursive-include rb_waveform_core *.py
@@ -27,12 +29,14 @@ global-exclude *.pyd
 
 # Exclude virtual environment
 prune rkbx_wavw_venv
+prune TEST
 
 # Exclude git and IDE files
 global-exclude .git*
 global-exclude .vscode
 global-exclude *.swp
 global-exclude *~
+global-exclude requirements.txt
 
 # Exclude development documentation
 exclude CORE_LAB_SPLIT_CHECKLIST.md
