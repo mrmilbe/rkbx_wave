@@ -5,8 +5,13 @@
 
 from typing import Iterable, List
 import time
+import subprocess
 
-from rb_waveform_lab.rkbx_link_listener import DeckEvent, RekordboxLinkListener
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from rb_waveform_core.rkbx_link_listener import DeckEvent, RekordboxLinkListener
 
 
 # Edit this tuple locally when you want to tweak the output columns.
@@ -20,10 +25,10 @@ FIELDS_TO_SHOW = (
 )
 
 FIELD_TO_SOURCES = {
-    #"time": ("time",),
+    "time": ("time",),
     "anlz": ("anlz_path",),
-    #"bpm": ("bpm_current", "bpm_original"),
-    #"time-scale": ("bpm_current", "bpm_original"),
+    "bpm": ("bpm_current", "bpm_original"),
+    "time-scale": ("bpm_current", "bpm_original"),
 }
 
 
@@ -51,26 +56,35 @@ def format_event(event: DeckEvent, fields: Iterable[str]) -> str:
 
 
 def main() -> None:
-    listener = RekordboxLinkListener()
-    listener.start()
-    print(f"Listening for Rekordbox Link events on {listener.ip}:{listener.port}")
-    print("Press Ctrl+C to stop.")
-    sources_of_interest = set()
-    for field in FIELDS_TO_SHOW:
-        sources_of_interest.update(FIELD_TO_SOURCES.get(field, ()))
+    rkbx_link_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'rkbx_link'))
+    rkbx_link_proc = subprocess.Popen(
+        [os.path.join(rkbx_link_dir, 'rkbx_link.exe')],
+        cwd=rkbx_link_dir  # Set working directory!
+    )
     try:
-        while True:
-            event = listener.get_event(timeout=1.0)
-            if event is None:
-                continue
-            if sources_of_interest and event.source not in sources_of_interest:
-                continue
-            print(format_event(event, FIELDS_TO_SHOW))
-    except KeyboardInterrupt:
-        print("\nStopping listener...")
+        listener = RekordboxLinkListener()
+        listener.start()
+        print(f"Listening for Rekordbox Link events on {listener.ip}:{listener.port}")
+        print("Press Ctrl+C to stop.")
+        sources_of_interest = set()
+        for field in FIELDS_TO_SHOW:
+            sources_of_interest.update(FIELD_TO_SOURCES.get(field, ()))
+        try:
+            while True:
+                event = listener.get_event(timeout=1.0)
+                if event is None:
+                    continue
+                if sources_of_interest and event.source not in sources_of_interest:
+                    continue
+                print(format_event(event, FIELDS_TO_SHOW))
+        except KeyboardInterrupt:
+            print("\nStopping listener...")
+        finally:
+            listener.stop()
+            time.sleep(0.1)
     finally:
-        listener.stop()
-        time.sleep(0.1)
+        rkbx_link_proc.terminate()
+        rkbx_link_proc.wait()
 
 if __name__ == "__main__":
     main()

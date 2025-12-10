@@ -3,8 +3,10 @@
 """Scan folders for .2EX files and extract waveform info."""
 
 import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from pathlib import Path
-from rb_waveform_lab.ANLZ import analyze_anlz_folder
+from rb_waveform_core.ANLZ import analyze_anlz_folder
 
 def scan(root: str, max_files: int = 10):
     root_path = Path(root)

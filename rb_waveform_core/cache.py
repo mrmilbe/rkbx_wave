@@ -15,8 +15,7 @@ from .analysis import WaveformAnalysis
 def _analysis_to_dict(wa: WaveformAnalysis) -> Dict[str, Any]:
 	return {
 		"low": wa.low.astype("float32").tolist(),
-		"lowmid": wa.lowmid.astype("float32").tolist(),
-		"midhigh": wa.midhigh.astype("float32").tolist(),
+		"mid": wa.mid.astype("float32").tolist(),
 		"high": wa.high.astype("float32").tolist(),
 		"duration_seconds": float(wa.duration_seconds),
 		"sample_rate": int(wa.sample_rate),
@@ -25,10 +24,11 @@ def _analysis_to_dict(wa: WaveformAnalysis) -> Dict[str, Any]:
 
 
 def _analysis_from_dict(d: Dict[str, Any]) -> WaveformAnalysis:
+	# Support both new 3-band and legacy 4-band cache formats
+	mid_data = d.get("mid", d.get("lowmid", d.get("midhigh", [])))
 	return WaveformAnalysis(
 		low=np.asarray(d["low"], dtype=np.float32),
-		lowmid=np.asarray(d["lowmid"], dtype=np.float32),
-		midhigh=np.asarray(d["midhigh"], dtype=np.float32),
+		mid=np.asarray(mid_data, dtype=np.float32),
 		high=np.asarray(d["high"], dtype=np.float32),
 		duration_seconds=float(d["duration_seconds"]),
 		sample_rate=int(d["sample_rate"]),

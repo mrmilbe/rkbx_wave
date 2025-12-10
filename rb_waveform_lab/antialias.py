@@ -1,9 +1,9 @@
 # Copyright (c) mrmilbe
 
-"""Antialiasing cache for waveform display.
+"""Antialiasing cache for waveform display (Lab-only).
 
 Downsamples high-resolution waveforms to screen resolution to prevent aliasing
-artifacts during rendering. Caches results for performance.
+artifacts during live rendering. Only used by lab/tuning tools.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from .analysis import WaveformAnalysis
+from rb_waveform_core.analysis import WaveformAnalysis, resample_analysis
 
 
 @dataclass
@@ -120,7 +120,6 @@ def get_antialiased_waveform(
     )
     
     # Downsample to target_pixels using proper antialiasing
-    from .analysis import resample_analysis
     antialiased = resample_analysis(window_analysis, target_pixels)
     
     # Update cache

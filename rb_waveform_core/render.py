@@ -15,12 +15,15 @@ from .config import WaveformColorConfig, WaveformRenderConfig
 def _band_array(analysis: WaveformAnalysis, name: str) -> np.ndarray:
 	if name == "low":
 		return analysis.low
-	if name == "lowmid":
-		return analysis.lowmid
-	if name == "midhigh":
-		return analysis.midhigh
+	if name == "mid":
+		return analysis.mid
 	if name == "high":
 		return analysis.high
+	# Legacy aliases for lab compatibility
+	if name == "lowmid":
+		return analysis.mid  # lowmid -> mid
+	if name == "midhigh":
+		return analysis.mid  # midhigh -> mid
 	raise ValueError(f"Unknown band name: {name}")
 
 
@@ -60,28 +63,35 @@ def _build_window_analysis(
 	start_bin: int,
 	window_bins: int,
 	seconds_per_bin: float,
+	use_overview_gains: bool = False,
 ) -> WaveformAnalysis:
 	window_bins = max(1, int(window_bins))
 	sec_per_bin = max(1e-9, float(seconds_per_bin))
 	low = _extract_band_window(analysis.low, start_bin, window_bins)
-	lowmid = _extract_band_window(analysis.lowmid, start_bin, window_bins)
-	midhigh = _extract_band_window(analysis.midhigh, start_bin, window_bins)
+	mid = _extract_band_window(analysis.mid, start_bin, window_bins)
 	high = _extract_band_window(analysis.high, start_bin, window_bins)
-	smoothing = max(1, int(getattr(render_cfg, "smoothing_bins", 1)))
-	low_processed = _apply_gain(_smooth_array(low, smoothing), getattr(render_cfg, "low_gain", 1.0))
-	lowmid_processed = _apply_gain(
-		_smooth_array(lowmid, smoothing), getattr(render_cfg, "lowmid_gain", 1.0)
-	)
-	midhigh_processed = _apply_gain(
-		_smooth_array(midhigh, smoothing), getattr(render_cfg, "midhigh_gain", 1.0)
-	)
-	high_processed = _apply_gain(
-		_smooth_array(high, smoothing), getattr(render_cfg, "high_gain", 1.0)
-	)
+	
+	# Select appropriate smoothing and gains based on overview mode
+	if use_overview_gains:
+		smoothing = max(1, int(getattr(render_cfg, "overview_smoothing_bins", 30)))
+	else:
+		smoothing = max(1, int(getattr(render_cfg, "smoothing_bins", 1)))
+	
+	if use_overview_gains:
+		low_gain = getattr(render_cfg, "overview_low_gain", 1.0)
+		mid_gain = getattr(render_cfg, "overview_mid_gain", getattr(render_cfg, "overview_midhigh_gain", 1.0))
+		high_gain = getattr(render_cfg, "overview_high_gain", 1.0)
+	else:
+		low_gain = getattr(render_cfg, "low_gain", 1.0)
+		mid_gain = getattr(render_cfg, "mid_gain", getattr(render_cfg, "midhigh_gain", 1.0))
+		high_gain = getattr(render_cfg, "high_gain", 1.0)
+	
+	low_processed = _apply_gain(_smooth_array(low, smoothing), low_gain)
+	mid_processed = _apply_gain(_smooth_array(mid, smoothing), mid_gain)
+	high_processed = _apply_gain(_smooth_array(high, smoothing), high_gain)
 	return WaveformAnalysis(
 		low=low_processed.astype(np.float32, copy=False),
-		lowmid=lowmid_processed.astype(np.float32, copy=False),
-		midhigh=midhigh_processed.astype(np.float32, copy=False),
+		mid=mid_processed.astype(np.float32, copy=False),
 		high=high_processed.astype(np.float32, copy=False),
 		duration_seconds=float(window_bins * sec_per_bin),
 		sample_rate=analysis.sample_rate,
@@ -107,7 +117,6 @@ def render_waveform_image(
 	show_beat_grid: bool = False,
 	seconds_per_bin: float = 0.0,
 ) -> Image.Image:
-	"""Render true 4-band waveform to a Pillow Image."""
 
 	w = render_cfg.image_width
 	h = render_cfg.image_height
@@ -132,26 +141,23 @@ def render_waveform_image(
 
 	band_color_map = {
 		"low": color_cfg.low_color,
+		"mid": color_cfg.mid_color,
+		"high": color_cfg.high_color,
+		# Legacy aliases (for lab compatibility)
 		"lowmid": color_cfg.lowmid_color,
 		"midhigh": color_cfg.midhigh_color,
-		"high": color_cfg.high_color,
 	}
 
-	# Restrict rendering to three visible bands to avoid duplicate mid band.
-	# This keeps analysis and sliders 4-band, but only shows a 3-band view.
+	# Use band_order directly - should be 3 bands (low, mid, high)
 	render_band_order = [b for b in color_cfg.band_order if b in band_color_map]
+	# Limit to 3 bands max
 	if len(render_band_order) > 3:
-		# Prefer low, midhigh, high if present; otherwise take first three.
-		preferred = ["low", "midhigh", "high"]
-		ordered_pref = [b for b in preferred if b in render_band_order]
-		remaining = [b for b in render_band_order if b not in ordered_pref]
-		render_band_order = (ordered_pref + remaining)[:3]
+		render_band_order = render_band_order[:3]
 	elif len(render_band_order) == 0:
 		return img
 
 	if color_cfg.stack_bands:
-		# True vertical stacking: divide usable height into equal lanes,
-		# one per band, drawn independently without overlap.
+		# ...existing code for stack_bands...
 		band_count = len(render_band_order)
 		if band_count == 0:
 			return img
@@ -170,28 +176,59 @@ def render_waveform_image(
 				y0 = lane_bottom
 				y1 = max(lane_top, lane_bottom - v)
 				draw.line((x, int(y0), x, int(y1)), fill=color, width=1)
+	elif color_cfg.overview_mode:
+		# Rekordbox-style stacked overview rendering
+		# Only works for 3 bands: low, mid, high
+		# Get arrays for each band
+		low_vals = np.clip(_band_array(analysis, "low"), 0.0, 1.0)
+		mid_vals = np.clip(_band_array(analysis, "mid"), 0.0, 1.0)
+		high_vals = np.clip(_band_array(analysis, "high"), 0.0, 1.0)
+		low_col = _average_columns(low_vals, column_start, column_end)
+		mid_col = _average_columns(mid_vals, column_start, column_end)
+		high_col = _average_columns(high_vals, column_start, column_end)
+		# Compute stacked heights
+		low_height = (low_col * usable_h).astype(int)
+		mid_height = ((low_col + mid_col) * usable_h).astype(int)
+		high_height = ((low_col + mid_col + high_col) * usable_h).astype(int)
+		# Draw low band (bottom)
+		for x in range(w):
+			v = low_height[x]
+			if v <= 0:
+				continue
+			y0 = h - margin
+			y1 = y0 - v
+			draw.line((x, int(y0), x, int(y1)), fill=band_color_map["low"], width=1)
+		# Draw mid band (middle, stacked on low)
+		for x in range(w):
+			v0 = low_height[x]
+			v1 = mid_height[x]
+			if v1 <= v0:
+				continue
+			y0 = h - margin - v0
+			y1 = h - margin - v1
+			draw.line((x, int(y0), x, int(y1)), fill=band_color_map["mid"], width=1)
+		# Draw high band (top, stacked on mid)
+		for x in range(w):
+			v0 = mid_height[x]
+			v1 = high_height[x]
+			if v1 <= v0:
+				continue
+			y0 = h - margin - v0
+			y1 = h - margin - v1
+			draw.line((x, int(y0), x, int(y1)), fill=band_color_map["high"], width=1)
 	else:
-		# Overlaid/symmetric or overview modes.
+		# Overlaid/symmetric (non-overview) mode
 		for band_name in render_band_order:
 			vals = np.clip(_band_array(analysis, band_name), 0.0, 1.0)
 			column_values = _average_columns(vals, column_start, column_end)
 			color = band_color_map[band_name]
-
-			if color_cfg.overview_mode:
-				heights = (column_values * usable_h).astype(int)
-			else:
-				heights = (column_values * half_h).astype(int)
-
+			heights = (column_values * half_h).astype(int)
 			for x in range(w):
 				v = heights[x]
 				if v <= 0:
 					continue
-				if color_cfg.overview_mode:
-					y0 = h - margin
-					y1 = y0 - v
-				else:
-					y0 = center_y + v
-					y1 = center_y - v
+				y0 = center_y + v
+				y1 = center_y - v
 				draw.line((x, int(y0), x, int(y1)), fill=color, width=1)
 
 	if render_cfg.center_line:
@@ -206,7 +243,18 @@ def render_waveform_image(
 			# Convert bin to pixel x coordinate
 			beat_x = int((beat_bin / n_bins) * w)
 			if 0 <= beat_x < w:
-				draw.line((beat_x, 0, beat_x, h), fill=(255, 0, 0), width=2)
+				draw.line((beat_x, 0, beat_x, h), fill=(255, 255, 255), width=2)
+				circle_radius = 2  # 4px diameter
+				# Top circle
+				draw.ellipse(
+					(beat_x - circle_radius, 0 - circle_radius, beat_x + circle_radius, 0 + circle_radius),
+					fill=(255, 0, 0)
+				)
+				# Bottom circle
+				draw.ellipse(
+					(beat_x - circle_radius, h - circle_radius, beat_x + circle_radius, h + circle_radius),
+					fill=(255, 0, 0)
+				)
 
 	return img
 
@@ -225,7 +273,8 @@ def render_waveform_window(
 ) -> Image.Image:
 	# Use scaled timing for waveform rendering, original timing for beat grid
 	render_spb = scaled_seconds_per_bin if scaled_seconds_per_bin is not None else seconds_per_bin
-	window_analysis = _build_window_analysis(analysis, render_cfg, start_bin, window_bins, render_spb)
+	use_overview_gains = getattr(color_cfg, "overview_mode", False)
+	window_analysis = _build_window_analysis(analysis, render_cfg, start_bin, window_bins, render_spb, use_overview_gains)
 	return render_waveform_image(window_analysis, color_cfg, render_cfg, beat_grid=beat_grid, show_beat_grid=show_beat_grid, seconds_per_bin=seconds_per_bin)
 
 

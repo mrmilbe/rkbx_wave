@@ -21,7 +21,7 @@ from typing import Iterable, Optional, Sequence
 
 from pyrekordbox.anlz import AnlzFile
 
-from rb_waveform_lab.ANLZ import analyze_anlz_folder, extract_cues
+from rb_waveform_core.ANLZ import analyze_anlz_folder, extract_cues
 
 DEFAULT_DECK_PATH = Path(
     r"C:/Users/chris/AppData/Roaming/Pioneer/rekordbox/share/PIONEER/USBANLZ/a82/484d8-6208-4fd8-9406-4393f48abd78"

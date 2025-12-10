@@ -135,7 +135,7 @@ class DeckController:
             link_scale=self.time_scale,
         )
 
-        render_cfg.image_height = preview_height
+        render_cfg.image_height = render_cfg.render_mode.get_render_height()
         img, cache_out = render_window_image(
             self.analysis,
             color_cfg,
@@ -159,6 +159,7 @@ class DeckController:
             target_height=preview_height,
             draw_playhead=True,
             playhead_fraction=plan.playhead_fraction,
+            interpolation=render_cfg.render_mode.get_interpolation(),
         )
         return RenderResult(image=img, plan_start_time=plan.start_time, plan_window_duration=plan.window_duration)
 

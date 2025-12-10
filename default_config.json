@@ -1,0 +1,61 @@
+{
+  "color": {
+    "low_color": [
+      0,
+      120,
+      255
+    ],
+    "mid_color": [
+      150,
+      90,
+      40
+    ],
+    "high_color": [
+      255,
+      255,
+      255
+    ],
+    "band_order_string_default": "l,m,h",
+    "band_order_string_overview": "h,m,l",
+    "overview_mode": false,
+    "stack_bands": false,
+    "blend_bands": true,
+    "lowmid_color": [
+      255,
+      120,
+      0
+    ],
+    "midhigh_color": [
+      150,
+      90,
+      40
+    ]
+  },
+  "render": {
+    "image_width": 898,
+    "image_height": 128,
+    "background_color": [
+      5,
+      5,
+      5
+    ],
+    "line_width": 1,
+    "margin_px": 4,
+    "center_line": false,
+    "smoothing_bins": 1,
+    "overview_smoothing_bins": 63,
+    "low_gain": 1.1860465116279069,
+    "mid_gain": 1.1860465116279069,
+    "high_gain": 1.3255813953488373,
+    "prerender_detail": 20117,
+    "deck_count": 2,
+    "render_mode": "default",
+    "overview_low_gain": 0.38372093023255816,
+    "overview_mid_gain": 0.45348837209302323,
+    "overview_high_gain": 1.5697674418604652,
+    "lowmid_gain": 0.1,
+    "midhigh_gain": 1.8294117647058827,
+    "overview_lowmid_gain": 1.0,
+    "overview_midhigh_gain": 1.0
+  }
+}

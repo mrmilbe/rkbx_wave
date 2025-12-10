@@ -21,7 +21,11 @@ from typing import Optional
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageTk
-from rb_waveform_lab.ANLZ import analyze_anlz_folder
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Core ANLZ functions for loading Rekordbox PWV data
+from rb_waveform_core.ANLZ import analyze_anlz_folder
 
 DEFAULT_DECK_PATH = Path(
     r"C:/Users/chris/AppData/Roaming/Pioneer/rekordbox/share/PIONEER/USBANLZ/a82/484d8-6208-4fd8-9406-4393f48abd78"

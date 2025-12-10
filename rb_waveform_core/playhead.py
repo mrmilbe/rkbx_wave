@@ -333,6 +333,7 @@ def finalize_preview_image(
     target_height: int,
     draw_playhead: bool = False,
     playhead_fraction: Optional[float] = None,
+    interpolation: str = "NEAREST",
 ) -> Image.Image:
     """Resize image to target dimensions and optionally draw playhead.
 
@@ -342,6 +343,7 @@ def finalize_preview_image(
         target_height: Desired output height.
         draw_playhead: Whether to draw a playhead line.
         playhead_fraction: Position of playhead (0.0-1.0), defaults to 0.5.
+        interpolation: Interpolation mode for resize ("NEAREST" or "BILINEAR").
 
     Returns:
         Finalized image ready for display.
@@ -351,8 +353,10 @@ def finalize_preview_image(
     needs_resize = img.width != target_width or img.height != target_height
     
     if needs_resize:
+        # Choose interpolation method
+        resample = PILImage.NEAREST if interpolation == "NEAREST" else PILImage.BILINEAR
         # Resize creates a new image, so we can draw playhead in-place
-        img = img.resize((target_width, target_height), PILImage.BILINEAR)
+        img = img.resize((target_width, target_height), resample)
         if draw_playhead:
             img = draw_playhead_line(img, playhead_fraction, in_place=True)
     elif draw_playhead:

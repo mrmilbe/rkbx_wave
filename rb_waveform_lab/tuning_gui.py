@@ -24,32 +24,40 @@ from pathlib import Path
 
 import numpy as np
 from PIL import ImageTk
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from rb_waveform_lab.analysis import analyze_bands, analysis_from_rb_waveform, WaveformAnalysis
-from rb_waveform_lab.config import (
-    DEFAULT_ANALYSIS_CONFIG,
-    DEFAULT_COLOR_CONFIG,
-    DEFAULT_RENDER_CONFIG,
-    WaveformAnalysisConfig,
-    WaveformColorConfig,
-    WaveformRenderConfig,
-    parse_band_order,
-    config_to_dict,
-    dict_to_config,
-)
-from rb_waveform_lab.analysis import resolve_audio_path
-from rb_waveform_lab.ANLZ import (
-    analyze_anlz_folder,
-    extract_beat_grid_downbeats,
-    load_audio_for_analysis,
-    load_waveform_for_rekordbox,
-)
+# Lab: audio analysis and antialias
+from rb_waveform_lab.analysis import analyze_bands
 from rb_waveform_lab.antialias import (
     AntialiasCache,
     get_antialiased_waveform,
     reset_antialias_cache,
 )
-from rb_waveform_lab.playhead import (
+from rb_waveform_lab.config import (
+    DEFAULT_ANALYSIS_CONFIG,
+    WaveformAnalysisConfig,
+    lab_config_to_dict,
+    lab_dict_to_config,
+)
+
+# Core: shared types, config, ANLZ, playhead, rendering
+from rb_waveform_core.analysis import WaveformAnalysis, analysis_from_rb_waveform, resolve_audio_path
+from rb_waveform_core.config import (
+    DEFAULT_COLOR_CONFIG,
+    DEFAULT_RENDER_CONFIG,
+    WaveformColorConfig,
+    WaveformRenderConfig,
+    parse_band_order,
+)
+from rb_waveform_core.ANLZ import (
+    analyze_anlz_folder,
+    extract_beat_grid_downbeats,
+    load_audio_for_analysis,
+    load_waveform_for_rekordbox,
+)
+from rb_waveform_core.playhead import (
     PrerenderCache,
     TimingInfo,
     WindowPlan,
@@ -60,7 +68,7 @@ from rb_waveform_lab.playhead import (
     render_window_image,
     reset_prerender_cache,
 )
-from rb_waveform_lab.rkbx_link_listener import DeckEvent, RekordboxLinkListener, format_link_status
+from rb_waveform_core.rkbx_link_listener import DeckEvent, RekordboxLinkListener, format_link_status
 
 
 # Discrete zoom levels in seconds (index 0 = most zoomed in)
@@ -105,11 +113,16 @@ class TuningApp:
         self.original_bpm: Optional[float] = None  # BPM from ANLZ file
 
         self.render_smoothing_var = tk.IntVar(value=5)
+        self.render_overview_smoothing_var = tk.IntVar(value=30)  # Initialize the new variable
         self.render_detail_var = tk.IntVar(value=20000)  # Max prerender detail
         self.render_low_gain_var = tk.DoubleVar(value=1.0)
+        self.render_overview_low_gain_var = tk.DoubleVar(value=1.0)  # Initialize overview low gain var
         self.render_lowmid_gain_var = tk.DoubleVar(value=1.0)
+        self.render_overview_lowmid_gain_var = tk.DoubleVar(value=1.0)  # Initialize overview lowmid gain var
         self.render_midhigh_gain_var = tk.DoubleVar(value=1.0)
+        self.render_overview_midhigh_gain_var = tk.DoubleVar(value=1.0)  # Initialize overview midhigh gain var
         self.render_high_gain_var = tk.DoubleVar(value=1.0)
+        self.render_overview_high_gain_var = tk.DoubleVar(value=1.0)  # Initialize overview high gain var
         self.analysis_widgets = []
         self.live_render_var = tk.BooleanVar(value=True)
         self.prerender_cache = PrerenderCache()
@@ -378,14 +391,20 @@ class TuningApp:
 
         # Band draw order (comma-separated short names: l,lm,mh,h)
         ttk.Label(grp, text="Band order").grid(row=1, column=0, sticky="w", pady=(4, 0))
-        self.band_order_var = tk.StringVar(value=self.color_cfg.band_order_string)
+        self.band_order_var = tk.StringVar(
+            value=self.color_cfg.band_order_string_overview if self.color_cfg.overview_mode
+            else self.color_cfg.band_order_string_default
+        )
         band_entry = ttk.Entry(grp, textvariable=self.band_order_var, width=24)
         band_entry.grid(row=1, column=1, columnspan=1, sticky="ew", padx=(4, 0), pady=(4, 0))
 
         def on_band_order_change(event: tk.Event) -> None:
             text = self.band_order_var.get().strip()
             # Store raw string; parsing is done when updating configs.
-            self.color_cfg.band_order_string = text
+            if self.color_cfg.overview_mode:
+                self.color_cfg.band_order_string_overview = text
+            else:
+                self.color_cfg.band_order_string_default = text
             self._mark_prerender_dirty()
             self._rerender_if_ready()
 
@@ -450,12 +469,21 @@ class TuningApp:
             )
             scale.grid(row=row, column=1, sticky="ew", padx=(4, 0))
 
-        add_render_slider(5, "Smoothing (bins)", self.render_smoothing_var, 1.0, 63.0, "{:.0f}")
-        add_render_slider(6, "Max detail (px)", self.render_detail_var, 2000.0, 30000.0, "{:.0f}")
-        add_render_slider(7, "Low gain", self.render_low_gain_var, 0.1, 5.0)
-        add_render_slider(8, "Low-mid gain", self.render_lowmid_gain_var, 0.1, 5.0)
-        add_render_slider(9, "Mid-high gain", self.render_midhigh_gain_var, 0.1, 5.0)
-        add_render_slider(10, "High gain", self.render_high_gain_var, 0.1, 5.0)
+        add_render_slider(5, "Smoothing (default)", self.render_smoothing_var, 1.0, 63.0, "{:.0f}")
+        add_render_slider(6, "Smoothing (overview)", self.render_overview_smoothing_var, 1.0, 63.0, "{:.0f}")
+        add_render_slider(7, "Max detail (px)", self.render_detail_var, 2000.0, 30000.0, "{:.0f}")
+        ttk.Separator(grp).grid(row=8, column=0, columnspan=3, sticky="ew", pady=(6, 6))
+        ttk.Label(grp, text="Default Mode Gains:").grid(row=9, column=0, columnspan=3, sticky="w")
+        add_render_slider(10, "Low gain", self.render_low_gain_var, 0.1, 5.0)
+        add_render_slider(11, "Low-mid gain", self.render_lowmid_gain_var, 0.1, 5.0)
+        add_render_slider(12, "Mid-high gain", self.render_midhigh_gain_var, 0.1, 5.0)
+        add_render_slider(13, "High gain", self.render_high_gain_var, 0.1, 5.0)
+        ttk.Separator(grp).grid(row=14, column=0, columnspan=3, sticky="ew", pady=(6, 6))
+        ttk.Label(grp, text="Overview Mode Gains:").grid(row=15, column=0, columnspan=3, sticky="w")
+        add_render_slider(16, "Low gain (OV)", self.render_overview_low_gain_var, 0.1, 5.0)
+        add_render_slider(17, "Low-mid gain (OV)", self.render_overview_lowmid_gain_var, 0.1, 5.0)
+        add_render_slider(18, "Mid-high gain (OV)", self.render_overview_midhigh_gain_var, 0.1, 5.0)
+        add_render_slider(19, "High gain (OV)", self.render_overview_high_gain_var, 0.1, 5.0)
 
     def _on_close(self) -> None:
         self.use_link_var.set(False)
@@ -888,7 +916,7 @@ class TuningApp:
             self._update_configs_from_widgets()
             
             # Serialize to dict
-            config_dict = config_to_dict(self.analysis_cfg, self.color_cfg, self.render_cfg)
+            config_dict = lab_config_to_dict(self.analysis_cfg, self.color_cfg, self.render_cfg)
             
             # Write to file
             with open(file_path, 'w') as f:
@@ -913,7 +941,7 @@ class TuningApp:
                 config_dict = json.load(f)
             
             # Deserialize
-            self.analysis_cfg, self.color_cfg, self.render_cfg = dict_to_config(config_dict)
+            self.analysis_cfg, self.color_cfg, self.render_cfg = lab_dict_to_config(config_dict)
             
             # Update all widgets to reflect loaded config
             self._update_widgets_from_configs()
@@ -938,15 +966,23 @@ class TuningApp:
         # Render config
         self.height_var.set(self.render_cfg.image_height)
         self.render_smoothing_var.set(self.render_cfg.smoothing_bins)
+        self.render_overview_smoothing_var.set(self.render_cfg.overview_smoothing_bins)
         self.render_detail_var.set(self.render_cfg.prerender_detail)
         self.render_low_gain_var.set(self.render_cfg.low_gain)
         self.render_lowmid_gain_var.set(self.render_cfg.lowmid_gain)
         self.render_midhigh_gain_var.set(self.render_cfg.midhigh_gain)
         self.render_high_gain_var.set(self.render_cfg.high_gain)
+        self.render_overview_low_gain_var.set(self.render_cfg.overview_low_gain)
+        self.render_overview_lowmid_gain_var.set(self.render_cfg.overview_lowmid_gain)
+        self.render_overview_midhigh_gain_var.set(self.render_cfg.overview_midhigh_gain)
+        self.render_overview_high_gain_var.set(self.render_cfg.overview_high_gain)
         
         # Color config
         if hasattr(self, "band_order_var"):
-            self.band_order_var.set(self.color_cfg.band_order_string)
+            self.band_order_var.set(
+                self.color_cfg.band_order_string_overview if self.color_cfg.overview_mode
+                else self.color_cfg.band_order_string_default
+            )
         if hasattr(self, "overview_var"):
             self.overview_var.set(1 if self.color_cfg.overview_mode else 0)
         if hasattr(self, "stack_bands_var"):
@@ -971,14 +1007,22 @@ class TuningApp:
         # Render config
         self.render_cfg.image_height = int(self.height_var.get())
         self.render_cfg.smoothing_bins = int(round(self.render_smoothing_var.get()))
+        self.render_cfg.overview_smoothing_bins = int(round(self.render_overview_smoothing_var.get()))
         self.render_cfg.prerender_detail = int(round(self.render_detail_var.get()))
         self.render_cfg.low_gain = float(self.render_low_gain_var.get())
         self.render_cfg.lowmid_gain = float(self.render_lowmid_gain_var.get())
         self.render_cfg.midhigh_gain = float(self.render_midhigh_gain_var.get())
         self.render_cfg.high_gain = float(self.render_high_gain_var.get())
+        self.render_cfg.overview_low_gain = float(self.render_overview_low_gain_var.get())
+        self.render_cfg.overview_lowmid_gain = float(self.render_overview_lowmid_gain_var.get())
+        self.render_cfg.overview_midhigh_gain = float(self.render_overview_midhigh_gain_var.get())
+        self.render_cfg.overview_high_gain = float(self.render_overview_high_gain_var.get())
         # Band order parsing
         raw_order = self.band_order_var.get() if hasattr(self, "band_order_var") else ""
-        self.color_cfg.band_order, self.color_cfg.band_order_string = parse_band_order(raw_order)
+        if self.color_cfg.overview_mode:
+            self.color_cfg.band_order, self.color_cfg.band_order_string_overview = parse_band_order(raw_order)
+        else:
+            self.color_cfg.band_order, self.color_cfg.band_order_string_default = parse_band_order(raw_order)
         self.color_cfg.overview_mode = bool(self.overview_var.get())
         self.color_cfg.stack_bands = bool(self.stack_bands_var.get())
         # Width follows window size for preview; no explicit slider.

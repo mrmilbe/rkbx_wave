@@ -16,27 +16,31 @@ import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 from pathlib import Path
 from typing import Optional
+import subprocess
+import os
 
 from PIL import ImageTk
 
-from rb_waveform_lab.config import (
-    DEFAULT_ANALYSIS_CONFIG,
+from rb_waveform_core.config import (
     DEFAULT_COLOR_CONFIG,
     DEFAULT_RENDER_CONFIG,
-    WaveformAnalysisConfig,
     WaveformColorConfig,
     WaveformRenderConfig,
+    RenderMode,
+    config_to_dict,
     dict_to_config,
+    parse_band_order,
 )
-from rb_waveform_lab.deck_controller import DeckController
-from rb_waveform_lab.playhead import reset_prerender_cache
-from rb_waveform_lab.rkbx_link_listener import DeckEvent, RekordboxLinkListener
+from rb_waveform_core.deck_controller import DeckController
+from rb_waveform_core.playhead import reset_prerender_cache
+from rb_waveform_core.rkbx_link_listener import DeckEvent, RekordboxLinkListener
 
 
 LIBRARY_SEARCH_ROOT: Optional[Path] = Path(r"C:\Rekordbox")
 if not LIBRARY_SEARCH_ROOT.is_dir():
     LIBRARY_SEARCH_ROOT = None
 
+LAST_CONFIG_PATH = Path("last_config.txt")
 DEFAULT_CONFIG_PATH = Path("waveform_config.json")
 
 # Match tuning_gui: discrete zoom levels in seconds
@@ -49,31 +53,49 @@ class WaveformSyncApp:
         self.root = root
         self.root.title("WaveformSync - Dual Deck Display")
         
+        # Start rkbx_link.exe
+        rkbx_link_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'rkbx_link'))
+        self.rkbx_link_proc = subprocess.Popen(
+            [os.path.join(rkbx_link_dir, 'rkbx_link.exe')],
+            cwd=rkbx_link_dir
+        )
+        
         # Shared config (loaded from file)
-        self.analysis_cfg: WaveformAnalysisConfig = DEFAULT_ANALYSIS_CONFIG
         self.color_cfg: WaveformColorConfig = DEFAULT_COLOR_CONFIG
         self.render_cfg: WaveformRenderConfig = DEFAULT_RENDER_CONFIG
         
-        # Dual deck controllers (render + ANLZ/BPM logic)
-        self.deck_a = DeckController(LIBRARY_SEARCH_ROOT)
-        self.deck_b = DeckController(LIBRARY_SEARCH_ROOT)
-        self.deck_a_image_tk: Optional[ImageTk.PhotoImage] = None
-        self.deck_b_image_tk: Optional[ImageTk.PhotoImage] = None
+        # Support up to deck_count decks (from config)
+        self.deck_count = self.render_cfg.deck_count
+        self.decks = {i: DeckController(LIBRARY_SEARCH_ROOT) for i in range(self.deck_count)}
+        self.deck_images_tk = {i: None for i in range(self.deck_count)}
         
         # Link listener
         self.link_listener: Optional[RekordboxLinkListener] = None
         self._link_poll_job: Optional[str] = None
         self.link_poll_interval_ms = 50
         self._is_rendering: bool = False
+        self._waveform_resize_job: Optional[str] = None
+        self._last_waveform_area_size: tuple = (0, 0)  # Track (width, height) of waveform_area
         
         # UI variables
         self.overview_var = tk.BooleanVar(value=False)
         self.stack_bands_var = tk.BooleanVar(value=False)
-        self.beat_grid_var = tk.BooleanVar(value=False)
+        self.beat_grid_var = tk.BooleanVar(value=True)  # Enable beat grid by default
         self.zoom_var = tk.IntVar(value=0)  # index into fixed zoom levels
         self.link_status_var = tk.StringVar(value="RB Link: disabled")
         
-        self._load_default_config()
+        # Tuning panel variables
+        self.tune_panel_visible = tk.BooleanVar(value=False)
+        self.render_mode_var = tk.StringVar(value=RenderMode.DEFAULT.value)
+        self.band_order_var = tk.StringVar(value="l,m,h")  # Default 3-band order
+        # Band gain variables (context-sensitive - will be synced based on overview mode)
+        self.low_gain_var = tk.DoubleVar(value=1.0)
+        self.mid_gain_var = tk.DoubleVar(value=1.0)
+        self.high_gain_var = tk.DoubleVar(value=1.0)
+        # Smoothing variable (context-sensitive)
+        self.smoothing_var = tk.IntVar(value=1)
+        
+        self._load_last_or_default_config()
         self._build_ui()
         self._start_link_listener()
         
@@ -88,16 +110,28 @@ class WaveformSyncApp:
         
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
     
-    def _load_default_config(self) -> None:
-        """Load configuration from default file if it exists."""
-        if DEFAULT_CONFIG_PATH.exists():
+
+    def _load_last_or_default_config(self) -> None:
+        """Load configuration from last_config.txt if it exists, else from default."""
+        config_path = DEFAULT_CONFIG_PATH
+        if LAST_CONFIG_PATH.exists():
             try:
-                with open(DEFAULT_CONFIG_PATH, 'r') as f:
-                    config_dict = json.load(f)
-                self.analysis_cfg, self.color_cfg, self.render_cfg = dict_to_config(config_dict)
-                print(f"[Config] Loaded from {DEFAULT_CONFIG_PATH}")
+                with open(LAST_CONFIG_PATH, 'r') as f:
+                    last_path = f.read().strip()
+                if last_path and Path(last_path).exists():
+                    config_path = Path(last_path)
             except Exception as e:
-                print(f"[Config] Failed to load default config: {e}")
+                print(f"[Config] Failed to read last_config.txt: {e}")
+        if config_path.exists():
+            try:
+                with open(config_path, 'r') as f:
+                    config_dict = json.load(f)
+                self.color_cfg, self.render_cfg = dict_to_config(config_dict)
+                self.deck_count = self.render_cfg.deck_count
+                print(f"[Config] Loaded from {config_path}")
+            except Exception as e:
+                print(f"[Config] Failed to load config: {e}")
+        self._sync_tuning_vars_from_config()
     
     def _build_ui(self) -> None:
         self.root.configure(bg="black")
@@ -106,16 +140,25 @@ class WaveformSyncApp:
         style = ttk.Style()
         style.configure("Black.TFrame", background="black")
         style.configure("Black.TLabel", background="black", foreground="white")
+        style.configure("Tune.TFrame", background="#1a1a1a")
+        style.configure("Tune.TLabel", background="#1a1a1a", foreground="white")
+        style.configure("Tune.TButton", background="#333333")
         
         main = ttk.Frame(self.root, style="Black.TFrame")
-        main.pack(fill="both", expand=False, padx=2, pady=2)
-        main.columnconfigure(0, weight=1)
+        main.pack(fill="both", expand=True, padx=2, pady=2)
+        main.columnconfigure(1, weight=1)  # Waveform area expands
+        main.rowconfigure(1, weight=1)  # Content area expands
         
-        # Top controls
+        # Top controls (spans both columns)
         controls = ttk.Frame(main)
-        controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        controls.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         
-        ttk.Button(controls, text="Load Config", command=self._on_load_config).pack(side="left", padx=(0, 8))
+        tune_btn = ttk.Button(controls, text="Tune", command=self._toggle_tune_panel)
+        tune_btn.pack(side="left", padx=(0, 8))
+        load_btn = ttk.Button(controls, text="Load Config", command=self._on_load_config)
+        load_btn.pack(side="left", padx=(0, 2))
+        save_btn = ttk.Button(controls, text="Save Config", command=self._on_save_config)
+        save_btn.pack(side="left", padx=(0, 8))
         
         ttk.Checkbutton(
             controls,
@@ -152,40 +195,281 @@ class WaveformSyncApp:
         
         ttk.Label(controls, textvariable=self.link_status_var).pack(side="right")
         
-        # Deck 1 display (no frame border)
-        self.deck_a_label = ttk.Label(main, relief="flat", background="black")
-        self.deck_a_label.grid(row=1, column=0, sticky="ew", pady=(2, 1))
+        # Tuning panel (left side, collapsible)
+        self.tune_panel = ttk.Frame(main, style="Tune.TFrame", width=200)
+        # Don't grid it yet - will be shown/hidden by toggle
+        self._build_tune_panel()
         
-        self.deck_a_info = ttk.Label(main, text="Deck 1: No track loaded", anchor="w", style="Black.TLabel")
-        self.deck_a_info.grid(row=2, column=0, sticky="ew", pady=(0, 2))
+        # Waveform display area (right side)
+        self.waveform_area = ttk.Frame(main, style="Black.TFrame")
+        self.waveform_area.grid(row=1, column=1, sticky="nsew")
+        self.waveform_area.columnconfigure(0, weight=1)
+        self.waveform_area.bind("<Configure>", self._on_waveform_area_resize)
         
-        # Deck 2 display (no frame border)
-        self.deck_b_label = ttk.Label(main, relief="flat", background="black")
-        self.deck_b_label.grid(row=3, column=0, sticky="ew", pady=(1, 1))
+        # Deck displays (up to deck_count)
+        self.deck_labels = {}
+        self.deck_infos = {}
+        for i in range(self.deck_count):
+            # Waveform label row gets weight to expand vertically
+            self.waveform_area.rowconfigure(2 * i, weight=1)
+            self.deck_labels[i] = ttk.Label(self.waveform_area, relief="flat", background="black")
+            self.deck_labels[i].grid(row=2 * i, column=0, sticky="nsew", pady=(2, 1))
+            # Info label row stays fixed height
+            self.waveform_area.rowconfigure(2 * i + 1, weight=0)
+            self.deck_infos[i] = ttk.Label(self.waveform_area, text=f"Deck {i+1}: No track loaded", anchor="w", style="Black.TLabel")
+            self.deck_infos[i].grid(row=2 * i + 1, column=0, sticky="ew", pady=(0, 2))
+    
+    def _build_tune_panel(self) -> None:
+        """Build the tuning subpanel contents."""
+        panel = self.tune_panel
+        row = 0
         
-        self.deck_b_info = ttk.Label(main, text="Deck 2: No track loaded", anchor="w", style="Black.TLabel")
-        self.deck_b_info.grid(row=4, column=0, sticky="ew", pady=(0, 2))
+        # Title
+        ttk.Label(panel, text="Tuning", style="Tune.TLabel", font=("TkDefaultFont", 10, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(8, 12)
+        )
+        row += 1
+        
+        # Render Mode dropdown
+        ttk.Label(panel, text="Render Mode:", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        render_mode_combo = ttk.Combobox(
+            panel,
+            textvariable=self.render_mode_var,
+            values=[m.value for m in RenderMode],
+            state="readonly",
+            width=10,
+        )
+        render_mode_combo.grid(row=row, column=1, sticky="w", padx=8, pady=2)
+        render_mode_combo.bind("<<ComboboxSelected>>", lambda e: self._on_render_mode_change())
+        row += 1
+        
+        # Separator
+        ttk.Separator(panel, orient="horizontal").grid(row=row, column=0, columnspan=2, sticky="ew", padx=8, pady=8)
+        row += 1
+        
+        # Band Order (3-band only)
+        ttk.Label(panel, text="Band Order (3):", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        band_order_entry = ttk.Entry(panel, textvariable=self.band_order_var, width=12)
+        band_order_entry.grid(row=row, column=1, sticky="w", padx=8, pady=2)
+        band_order_entry.bind("<Return>", lambda e: self._on_band_order_change())
+        band_order_entry.bind("<FocusOut>", lambda e: self._on_band_order_change())
+        row += 1
+        
+        # Band order hint
+        ttk.Label(panel, text="(l,m,h)", style="Tune.TLabel", foreground="gray").grid(
+            row=row, column=1, sticky="w", padx=8, pady=0
+        )
+        row += 1
+        
+        # Separator
+        ttk.Separator(panel, orient="horizontal").grid(row=row, column=0, columnspan=2, sticky="ew", padx=8, pady=8)
+        row += 1
+        
+        # Smoothing slider (context-sensitive)
+        self.smoothing_context_label = ttk.Label(panel, text="Smoothing (Default):", style="Tune.TLabel")
+        self.smoothing_context_label.grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        row += 1
+        
+        smoothing_scale = ttk.Scale(panel, from_=1, to=63, orient="horizontal", variable=self.smoothing_var, length=100)
+        smoothing_scale.grid(row=row, column=0, columnspan=2, sticky="ew", padx=8, pady=1)
+        smoothing_scale.bind("<ButtonRelease-1>", lambda e: self._on_smoothing_change())
+        smoothing_scale.bind("<B1-Motion>", lambda e: self._on_smoothing_change())  # Live update while dragging
+        row += 1
+        
+        # Separator
+        ttk.Separator(panel, orient="horizontal").grid(row=row, column=0, columnspan=2, sticky="ew", padx=8, pady=8)
+        row += 1
+        
+        # Context label for gains
+        self.gain_context_label = ttk.Label(panel, text="Gains (Default):", style="Tune.TLabel")
+        self.gain_context_label.grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 4))
+        row += 1
+        
+        # Low gain slider
+        ttk.Label(panel, text="Low:", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=1)
+        low_scale = ttk.Scale(panel, from_=0.0, to=3.0, orient="horizontal", variable=self.low_gain_var, length=100)
+        low_scale.grid(row=row, column=1, sticky="w", padx=8, pady=1)
+        low_scale.bind("<ButtonRelease-1>", lambda e: self._on_gain_change())
+        low_scale.bind("<B1-Motion>", lambda e: self._on_gain_change())  # Live update while dragging
+        row += 1
+        
+        # Mid gain slider  
+        ttk.Label(panel, text="Mid:", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=1)
+        mid_scale = ttk.Scale(panel, from_=0.0, to=3.0, orient="horizontal", variable=self.mid_gain_var, length=100)
+        mid_scale.grid(row=row, column=1, sticky="w", padx=8, pady=1)
+        mid_scale.bind("<ButtonRelease-1>", lambda e: self._on_gain_change())
+        mid_scale.bind("<B1-Motion>", lambda e: self._on_gain_change())  # Live update while dragging
+        row += 1
+        
+        # High gain slider
+        ttk.Label(panel, text="High:", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=1)
+        high_scale = ttk.Scale(panel, from_=0.0, to=3.0, orient="horizontal", variable=self.high_gain_var, length=100)
+        high_scale.grid(row=row, column=1, sticky="w", padx=8, pady=1)
+        high_scale.bind("<ButtonRelease-1>", lambda e: self._on_gain_change())
+        high_scale.bind("<B1-Motion>", lambda e: self._on_gain_change())  # Live update while dragging
+        row += 1
+        
+        # Separator
+        ttk.Separator(panel, orient="horizontal").grid(row=row, column=0, columnspan=2, sticky="ew", padx=8, pady=8)
+        row += 1
+        
+        # (Load/Save buttons moved to main controls row)
+    
+    def _toggle_tune_panel(self) -> None:
+        """Toggle visibility of tuning panel."""
+        if self.tune_panel_visible.get():
+            self.tune_panel.grid_forget()
+            self.tune_panel_visible.set(False)
+        else:
+            self.tune_panel.grid(row=1, column=0, sticky="ns", padx=(0, 8))
+            self.tune_panel_visible.set(True)
+            self._sync_tuning_vars_from_config()
+    
+    def _sync_tuning_vars_from_config(self) -> None:
+        """Sync tuning panel variables from current config."""
+        self.render_mode_var.set(self.render_cfg.render_mode.value)
+        # Show correct band order for current mode
+        if self.overview_var.get():
+            self.band_order_var.set(self.color_cfg.band_order_string_overview)
+        else:
+            self.band_order_var.set(self.color_cfg.band_order_string_default)
+        self._sync_gain_vars_from_config()
+    
+    def _sync_gain_vars_from_config(self) -> None:
+        """Sync gain sliders and smoothing based on current overview mode."""
+        is_overview = self.overview_var.get()
+        if is_overview:
+            self.low_gain_var.set(self.render_cfg.overview_low_gain)
+            self.mid_gain_var.set(self.render_cfg.overview_mid_gain)
+            self.high_gain_var.set(self.render_cfg.overview_high_gain)
+            self.smoothing_var.set(self.render_cfg.overview_smoothing_bins)
+            if hasattr(self, 'gain_context_label'):
+                self.gain_context_label.configure(text="Gains (Overview):")
+            if hasattr(self, 'smoothing_context_label'):
+                self.smoothing_context_label.configure(text="Smoothing (Overview):")
+        else:
+            self.low_gain_var.set(self.render_cfg.low_gain)
+            self.mid_gain_var.set(self.render_cfg.mid_gain)
+            self.high_gain_var.set(self.render_cfg.high_gain)
+            self.smoothing_var.set(self.render_cfg.smoothing_bins)
+            if hasattr(self, 'gain_context_label'):
+                self.gain_context_label.configure(text="Gains (Default):")
+            if hasattr(self, 'smoothing_context_label'):
+                self.smoothing_context_label.configure(text="Smoothing (Default):")
+    
+    def _on_render_mode_change(self) -> None:
+        """Handle render mode change."""
+        try:
+            mode = RenderMode(self.render_mode_var.get())
+            self.render_cfg.render_mode = mode
+            self.render_cfg.prerender_detail = mode.get_prerender_detail()
+            # Invalidate prerender caches
+            for i in range(self.deck_count):
+                reset_prerender_cache(self.decks[i].prerender_cache)
+            self._render_all_decks()
+        except ValueError:
+            pass
+    
+    def _on_band_order_change(self) -> None:
+        """Handle band order entry change."""
+        raw = self.band_order_var.get()
+        band_order, normalized = parse_band_order(raw)
+        # Restrict to 3 bands for this GUI
+        if len(band_order) > 3:
+            band_order = band_order[:3]
+            parts = normalized.split(",")[:3]
+            normalized = ",".join(parts)
+        # Save to correct config field based on current mode
+        if self.overview_var.get():
+            self.color_cfg.band_order_string_overview = normalized
+        else:
+            self.color_cfg.band_order_string_default = normalized
+        self.color_cfg.band_order = band_order
+        self.band_order_var.set(normalized)
+        # Invalidate and rerender
+        for i in range(self.deck_count):
+            reset_prerender_cache(self.decks[i].prerender_cache)
+        self._render_all_decks()
+    
+    def _on_gain_change(self) -> None:
+        """Handle gain slider change - update appropriate config values."""
+        is_overview = self.overview_var.get()
+        if is_overview:
+            self.render_cfg.overview_low_gain = self.low_gain_var.get()
+            self.render_cfg.overview_mid_gain = self.mid_gain_var.get()
+            self.render_cfg.overview_high_gain = self.high_gain_var.get()
+        else:
+            self.render_cfg.low_gain = self.low_gain_var.get()
+            self.render_cfg.mid_gain = self.mid_gain_var.get()
+            self.render_cfg.high_gain = self.high_gain_var.get()
+        # Invalidate and rerender
+        for i in range(self.deck_count):
+            reset_prerender_cache(self.decks[i].prerender_cache)
+        self._render_all_decks()
+    
+    def _on_smoothing_change(self) -> None:
+        """Handle smoothing slider change - update appropriate config values."""
+        is_overview = self.overview_var.get()
+        smoothing_val = int(self.smoothing_var.get())
+        if is_overview:
+            self.render_cfg.overview_smoothing_bins = smoothing_val
+        else:
+            self.render_cfg.smoothing_bins = smoothing_val
+        # Invalidate and rerender for live preview
+        for i in range(self.deck_count):
+            reset_prerender_cache(self.decks[i].prerender_cache)
+        self._render_all_decks()
+    
+    def _on_save_config(self) -> None:
+        """Save current configuration to file and update last_config.txt."""
+        file_path = filedialog.asksaveasfilename(
+            title="Save Configuration",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialfile="waveform_config.json",
+        )
+        if not file_path:
+            return
+        try:
+            config_dict = config_to_dict(self.color_cfg, self.render_cfg)
+            with open(file_path, 'w') as f:
+                json.dump(config_dict, f, indent=2)
+            # Update last_config.txt
+            try:
+                with open(LAST_CONFIG_PATH, 'w') as lastf:
+                    lastf.write(file_path)
+            except Exception as e:
+                print(f"[Config] Failed to update last_config.txt: {e}")
+            messagebox.showinfo("Success", f"Configuration saved to:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save configuration:\n{e}")
     
     def _on_load_config(self) -> None:
-        """Load configuration from file."""
+        """Load configuration from file and update last_config.txt."""
         file_path = filedialog.askopenfilename(
             title="Load Configuration",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
         )
         if not file_path:
             return
-        
         try:
             with open(file_path, 'r') as f:
                 config_dict = json.load(f)
-            self.analysis_cfg, self.color_cfg, self.render_cfg = dict_to_config(config_dict)
-            
-            # Clear caches for both decks and rerender
-            reset_prerender_cache(self.deck_a.prerender_cache)
-            reset_prerender_cache(self.deck_b.prerender_cache)
-            
+            self.color_cfg, self.render_cfg = dict_to_config(config_dict)
+            # Update last_config.txt
+            try:
+                with open(LAST_CONFIG_PATH, 'w') as lastf:
+                    lastf.write(file_path)
+            except Exception as e:
+                print(f"[Config] Failed to update last_config.txt: {e}")
+            # Sync tuning panel variables
+            self._sync_tuning_vars_from_config()
+            self.overview_var.set(self.color_cfg.overview_mode)
+            self.stack_bands_var.set(self.color_cfg.stack_bands)
+            # Clear caches for all decks and rerender
+            for i in range(self.deck_count):
+                reset_prerender_cache(self.decks[i].prerender_cache)
             self._render_all_decks()
-            
             messagebox.showinfo("Success", f"Configuration loaded from:\n{file_path}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load configuration:\n{e}")
@@ -194,11 +478,14 @@ class WaveformSyncApp:
         """Handle overview/stack mode toggle."""
         self.color_cfg.overview_mode = bool(self.overview_var.get())
         self.color_cfg.stack_bands = bool(self.stack_bands_var.get())
-        
-        # Invalidate prerender cache for both decks
-        reset_prerender_cache(self.deck_a.prerender_cache)
-        reset_prerender_cache(self.deck_b.prerender_cache)
-        
+
+        # Update band order entry for new mode
+        self._sync_tuning_vars_from_config()
+
+        # Invalidate prerender cache for all decks
+        for i in range(self.deck_count):
+            reset_prerender_cache(self.decks[i].prerender_cache)
+
         self._render_all_decks()
     
     def _on_zoom_change(self) -> None:
@@ -208,11 +495,27 @@ class WaveformSyncApp:
         self._render_all_decks()
     
     def _render_all_decks(self) -> None:
-        """Render both decks."""
-        if self.deck_a.analysis is not None:
-            self._render_deck(self.deck_a, self.deck_a_label, is_deck_a=True)
-        if self.deck_b.analysis is not None:
-            self._render_deck(self.deck_b, self.deck_b_label, is_deck_a=False)
+        """Render all decks."""
+        if self._waveform_resize_job is not None:
+            self.root.after_cancel(self._waveform_resize_job)
+            self._waveform_resize_job = None
+        for i in range(self.deck_count):
+            deck = self.decks[i]
+            if deck.analysis is not None:
+                self._render_deck(deck, self.deck_labels[i], deck_num=i)
+
+    def _on_waveform_area_resize(self, event=None) -> None:
+        """Throttle waveform renders during window resize."""
+        if self._is_rendering:
+            return  # Prevent recursive renders
+        # Only trigger if size actually changed
+        new_size = (self.waveform_area.winfo_width(), self.waveform_area.winfo_height())
+        if new_size == self._last_waveform_area_size:
+            return
+        self._last_waveform_area_size = new_size
+        if self._waveform_resize_job is not None:
+            self.root.after_cancel(self._waveform_resize_job)
+        self._waveform_resize_job = self.root.after(200, self._render_all_decks)
     
     def _start_link_listener(self) -> None:
         """Start Rekordbox Link listener for deck 0."""
@@ -250,18 +553,12 @@ class WaveformSyncApp:
     
     def _handle_link_event(self, event: DeckEvent) -> None:
         """Handle incoming Rekordbox Link event - route to correct deck controller."""
-        if event.deck == 0:
-            ctrl = self.deck_a
-            label = self.deck_a_label
-            info_label = self.deck_a_info
-            is_deck_a = True
-        elif event.deck == 1:
-            ctrl = self.deck_b
-            label = self.deck_b_label
-            info_label = self.deck_b_info
-            is_deck_a = False
-        else:
+        if event.deck not in self.decks:
             return
+        ctrl = self.decks[event.deck]
+        label = self.deck_labels[event.deck]
+        info_label = self.deck_infos[event.deck]
+        deck_num = event.deck
 
         # Update time
         if event.time_seconds is not None:
@@ -273,46 +570,59 @@ class WaveformSyncApp:
 
         # Load new track if path changed
         if event.anlz_path and (ctrl.anlz_path is None or Path(event.anlz_path) != ctrl.anlz_path):
-            deck_name = "Deck A" if is_deck_a else "Deck B"
-            print(f"[{deck_name}] New track: {event.anlz_path}")
-            self._load_deck_anlz(ctrl, Path(event.anlz_path), info_label)
+            print(f"[Deck {deck_num}] New track: {event.anlz_path}")
+            self._load_deck_anlz(ctrl, Path(event.anlz_path), info_label, deck_num)
 
         # Render only this deck with updated time
         if ctrl.analysis is not None and not self._is_rendering:
             self._is_rendering = True
             try:
-                self._render_deck(ctrl, label, is_deck_a=is_deck_a)
+                self._render_deck(ctrl, label, deck_num=deck_num)
             finally:
                 self._is_rendering = False
     
-    def _load_deck_anlz(self, ctrl: DeckController, anlz_folder: Path, info_label: ttk.Label) -> None:
+    def _load_deck_anlz(self, ctrl: DeckController, anlz_folder: Path, info_label: ttk.Label, deck_num: int) -> None:
         """Load ANLZ data for a deck controller."""
-        deck_name = "Deck A" if ctrl is self.deck_a else "Deck B"
-        
         if not anlz_folder.is_dir():
-            print(f"[{deck_name}] ANLZ folder not found: {anlz_folder}")
+            print(f"[Deck {deck_num}] ANLZ folder not found: {anlz_folder}")
             return
         
         try:
             ctrl.load_anlz(anlz_folder)
-            deck_number = 1 if ctrl is self.deck_a else 2
-            info_label.configure(text=f"Deck {deck_number}: {ctrl.song_name}")
+            info_label.configure(text=f"Deck {deck_num+1}: {ctrl.song_name}")
             if ctrl.cached_waveform is not None and ctrl.cached_duration is not None:
-                print(f"[{deck_name}] Loaded: {len(ctrl.cached_waveform)} bins, {ctrl.cached_duration:.1f}s")
+                print(f"[Deck {deck_num}] Loaded: {len(ctrl.cached_waveform)} bins, {ctrl.cached_duration:.1f}s")
             else:
-                print(f"[{deck_name}] Loaded ANLZ")
+                print(f"[Deck {deck_num}] Loaded ANLZ")
+            # Immediately render after loading
+            label = self.deck_labels[deck_num]
+            self._render_deck(ctrl, label, deck_num=deck_num)
         except Exception as e:
-            print(f"[{deck_name}] Failed to load ANLZ: {e}")
+            print(f"[Deck {deck_num}] Failed to load ANLZ: {e}")
     
-    def _render_deck(self, ctrl: DeckController, label: ttk.Label, *, is_deck_a: bool) -> None:
+    def _render_deck(self, ctrl: DeckController, label: ttk.Label, deck_num: int) -> None:
         """Render waveform for a specific deck via DeckController."""
         if ctrl.analysis is None:
             return
 
         preview_w = max(400, label.winfo_width() or 800)
-        preview_h = 128
+        # Calculate height from waveform_area, divided by deck_count, minus info label space
+        area_height = self.waveform_area.winfo_height()
+        if area_height > 0:
+            # Subtract ~25px per deck for info labels, divide remaining space
+            available_height = area_height - (self.deck_count * 25)
+            preview_h = max(64, available_height // self.deck_count)
+        else:
+            preview_h = 128  # Default fallback
+
         zoom_step = int(max(0, min(NUM_ZOOM_STEPS, self.zoom_var.get())))
         window_seconds = float(ZOOM_LEVELS_SECONDS[zoom_step])
+
+        # Set band order for rendering based on current mode
+        if self.overview_var.get():
+            self.color_cfg.band_order = parse_band_order(self.color_cfg.band_order_string_overview)[0]
+        else:
+            self.color_cfg.band_order = parse_band_order(self.color_cfg.band_order_string_default)[0]
 
         result = ctrl.render(
             preview_width=preview_w,
@@ -324,10 +634,7 @@ class WaveformSyncApp:
         )
 
         img_tk = ImageTk.PhotoImage(result.image)
-        if is_deck_a:
-            self.deck_a_image_tk = img_tk
-        else:
-            self.deck_b_image_tk = img_tk
+        self.deck_images_tk[deck_num] = img_tk
         label.configure(image=img_tk)
     
     def _on_close(self) -> None:
@@ -335,6 +642,10 @@ class WaveformSyncApp:
         self._cancel_link_poll()
         if self.link_listener is not None:
             self.link_listener.stop()
+        # Stop rkbx_link.exe
+        if hasattr(self, 'rkbx_link_proc') and self.rkbx_link_proc is not None:
+            self.rkbx_link_proc.terminate()
+            self.rkbx_link_proc.wait()
         self.root.destroy()
 
 
