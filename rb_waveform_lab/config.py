@@ -13,12 +13,13 @@ from rb_waveform_core.config import (
     WaveformRenderConfig,
     DEFAULT_COLOR_CONFIG,
     DEFAULT_RENDER_CONFIG,
-    CompressionMode,
-    NormalizationMode,
     config_to_dict as core_config_to_dict,
     dict_to_config as core_dict_to_config,
     parse_band_order,
 )
+
+# Import compression types from lab compression module
+from rb_waveform_lab.compression import CompressionMode, NormalizationMode
 
 
 @dataclass

@@ -438,16 +438,19 @@ class WaveformSyncApp:
             if hasattr(self, 'smoothing_context_label'):
                 self.smoothing_context_label.configure(text="Smoothing (Default):")
     
+    def _invalidate_caches_and_render(self) -> None:
+        """Invalidate all deck prerender caches and trigger re-render."""
+        for deck in self.decks.values():
+            reset_prerender_cache(deck.prerender_cache)
+        self._render_all_decks()
+    
     def _on_render_mode_change(self) -> None:
         """Handle render mode change."""
         try:
             mode = RenderMode(self.render_mode_var.get())
             self.render_cfg.render_mode = mode
             self.render_cfg.prerender_detail = mode.get_prerender_detail()
-            # Invalidate prerender caches
-            for i in range(self.deck_count):
-                reset_prerender_cache(self.decks[i].prerender_cache)
-            self._render_all_decks()
+            self._invalidate_caches_and_render()
         except ValueError:
             pass
     
@@ -467,10 +470,7 @@ class WaveformSyncApp:
             self.color_cfg.band_order_string_default = normalized
         self.color_cfg.band_order = band_order
         self.band_order_var.set(normalized)
-        # Invalidate and rerender
-        for i in range(self.deck_count):
-            reset_prerender_cache(self.decks[i].prerender_cache)
-        self._render_all_decks()
+        self._invalidate_caches_and_render()
     
     def _on_gain_change(self) -> None:
         """Handle gain slider change - update appropriate config values."""
@@ -483,10 +483,7 @@ class WaveformSyncApp:
             self.render_cfg.low_gain = self.low_gain_var.get()
             self.render_cfg.mid_gain = self.mid_gain_var.get()
             self.render_cfg.high_gain = self.high_gain_var.get()
-        # Invalidate and rerender
-        for i in range(self.deck_count):
-            reset_prerender_cache(self.decks[i].prerender_cache)
-        self._render_all_decks()
+        self._invalidate_caches_and_render()
     
     def _on_smoothing_change(self) -> None:
         """Handle smoothing slider change - update appropriate config values."""
@@ -496,10 +493,7 @@ class WaveformSyncApp:
             self.render_cfg.overview_smoothing_bins = smoothing_val
         else:
             self.render_cfg.smoothing_bins = smoothing_val
-        # Invalidate and rerender for live preview
-        for i in range(self.deck_count):
-            reset_prerender_cache(self.decks[i].prerender_cache)
-        self._render_all_decks()
+        self._invalidate_caches_and_render()
     
     def _on_save_config(self) -> None:
         """Save current configuration to file and update last_config.txt."""
@@ -547,10 +541,7 @@ class WaveformSyncApp:
             self._sync_tuning_vars_from_config()
             self.overview_var.set(self.color_cfg.overview_mode)
             self.stack_bands_var.set(self.color_cfg.stack_bands)
-            # Clear caches for all decks and rerender
-            for i in range(self.deck_count):
-                reset_prerender_cache(self.decks[i].prerender_cache)
-            self._render_all_decks()
+            self._invalidate_caches_and_render()
             messagebox.showinfo("Success", f"Configuration loaded from:\n{file_path}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load configuration:\n{e}")
@@ -563,11 +554,7 @@ class WaveformSyncApp:
         # Update band order entry for new mode
         self._sync_tuning_vars_from_config()
 
-        # Invalidate prerender cache for all decks
-        for i in range(self.deck_count):
-            reset_prerender_cache(self.decks[i].prerender_cache)
-
-        self._render_all_decks()
+        self._invalidate_caches_and_render()
     
     def _on_zoom_change(self) -> None:
         """Handle zoom slider change - snap to integer and rerender."""

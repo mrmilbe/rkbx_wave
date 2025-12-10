@@ -1,12 +1,20 @@
 # Copyright (c) mrmilbe
 
+"""Compression and normalization utilities for waveform analysis.
+
+This module provides amplitude compression and normalization functions
+used by the lab's audio analysis pipeline.
+"""
+
 from __future__ import annotations
 
 from typing import Literal
 
 import numpy as np
 
-from .config import CompressionMode, NormalizationMode
+# Type aliases for compression/normalization modes
+CompressionMode = Literal["log", "power", "soft", "linear"]
+NormalizationMode = Literal["peak", "rms", "percentile"]
 
 
 def _safe_max(x: np.ndarray) -> float:
@@ -70,4 +78,3 @@ def normalize_band(
 	if m <= 0.0 or not np.isfinite(m):
 		return x
 	return x / m
-

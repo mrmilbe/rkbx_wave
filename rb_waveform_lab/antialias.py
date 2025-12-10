@@ -13,7 +13,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from rb_waveform_core.analysis import WaveformAnalysis, resample_analysis
+from rb_waveform_core.analysis import WaveformAnalysis
+from rb_waveform_lab.analysis import resample_analysis
 
 
 @dataclass

@@ -12,6 +12,10 @@ import numpy as np
 from pyrekordbox.anlz import AnlzFile
 
 
+# Debug flag for verbose cue extraction output
+DEBUG_CUES = False
+
+
 @dataclass(frozen=True)
 class AnlzAnalysisResult:
     """Structured response for ANLZ lookups."""
@@ -71,30 +75,35 @@ def extract_cues(folder: Path | str) -> Optional[List[Dict[str, Any]]]:
         return None
 
     # Debug: list all tag types so we can see if PCOB is present
-    print(f"[extract_cues] ANLZ file: {anlz_file}")
-    unique_types = sorted({type(tag).__name__ for tag in tags}) if tags else []
-    print(f"[extract_cues] Tag types: {', '.join(unique_types) if unique_types else '(none)'}")
+    if DEBUG_CUES:
+        print(f"[extract_cues] ANLZ file: {anlz_file}")
+        unique_types = sorted({type(tag).__name__ for tag in tags}) if tags else []
+        print(f"[extract_cues] Tag types: {', '.join(unique_types) if unique_types else '(none)'}")
 
     cues: List[Dict[str, Any]] = []
     for tag in tags:
         if not type(tag).__name__.startswith("PCOB"):
             continue
-        print(f"[extract_cues] Found PCOB tag: {type(tag).__name__}")
+        if DEBUG_CUES:
+            print(f"[extract_cues] Found PCOB tag: {type(tag).__name__}")
         try:
             content = tag.struct.content
         except AttributeError:
-            print("[extract_cues]   PCOB tag missing struct.content")
+            if DEBUG_CUES:
+                print("[extract_cues]   PCOB tag missing struct.content")
             continue
 
         entries = getattr(content, "entries", None)
         if not entries:
-            print("[extract_cues]   PCOB has no entries")
+            if DEBUG_CUES:
+                print("[extract_cues]   PCOB has no entries")
             continue
 
         for e in entries:
             # Debug: show raw entry attributes to understand available fields
-            attrs = {k: getattr(e, k) for k in dir(e) if not k.startswith("_")}
-            print(f"[extract_cues]   Entry attrs: {attrs}")
+            if DEBUG_CUES:
+                attrs = {k: getattr(e, k) for k in dir(e) if not k.startswith("_")}
+                print(f"[extract_cues]   Entry attrs: {attrs}")
 
             cue_time = getattr(e, "time", None)
             cue_color = getattr(e, "color", None)

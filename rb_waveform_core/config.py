@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Tuple
-
-
-CompressionMode = Literal["log", "power", "soft", "linear"]
-NormalizationMode = Literal["peak", "rms", "percentile"]
+from typing import Tuple
 
 
 class RenderMode(Enum):
@@ -47,9 +43,6 @@ class WaveformColorConfig:
     low_color: Tuple[int, int, int] = (0, 120, 255)
     mid_color: Tuple[int, int, int] = (150, 90, 40)  # Mid frequencies
     high_color: Tuple[int, int, int] = (255, 255, 255)
-    # Legacy color aliases for lab compatibility
-    lowmid_color: Tuple[int, int, int] = (255, 120, 0)  # Legacy (unused in core)
-    midhigh_color: Tuple[int, int, int] = (150, 90, 40)  # Legacy alias for mid_color
 
     band_order: Tuple[str, ...] = ("low", "mid", "high")  # 3-band default
     overview_mode: bool = False  # asymmetric multi-band overview vs symmetric
@@ -73,9 +66,6 @@ class WaveformRenderConfig:
 	low_gain: float = 1.0
 	mid_gain: float = 1.0
 	high_gain: float = 1.0
-	# Legacy gain aliases for config compatibility
-	lowmid_gain: float = 1.0    # Legacy (maps to mid)
-	midhigh_gain: float = 1.0   # Legacy (maps to mid)
 	prerender_detail: int = 20000  # Max prerender width in pixels
 	deck_count: int = 2  # Number of decks to display in GUI
 	render_mode: RenderMode = RenderMode.DEFAULT
@@ -83,9 +73,6 @@ class WaveformRenderConfig:
 	overview_low_gain: float = 1.0
 	overview_mid_gain: float = 1.0
 	overview_high_gain: float = 1.0
-	# Legacy overview gain aliases
-	overview_lowmid_gain: float = 1.0   # Legacy
-	overview_midhigh_gain: float = 1.0  # Legacy
 
 
 DEFAULT_COLOR_CONFIG = WaveformColorConfig()
@@ -94,8 +81,7 @@ DEFAULT_RENDER_CONFIG = WaveformRenderConfig()
 
 # Short name -> internal band name mapping
 # Core uses 3 bands: l=low, m=mid, h=high (matching ANLZ file)
-# Legacy aliases: lm->mid, mh->mid (for lab compatibility)
-BAND_SHORT_NAMES = {"l": "low", "m": "mid", "h": "high", "lm": "mid", "mh": "mid"}
+BAND_SHORT_NAMES = {"l": "low", "m": "mid", "h": "high"}
 DEFAULT_BAND_ORDER = ("low", "mid", "high")
 
 
@@ -103,7 +89,6 @@ def parse_band_order(raw_string: str) -> Tuple[Tuple[str, ...], str]:
 	"""Parse a comma-separated band order string.
 	
 	Core uses 3 bands: l=low, m=mid, h=high (matching ANLZ file)
-	Legacy lm/mh both map to mid.
 
 	Returns:
 		(band_order_tuple, normalized_string)
@@ -124,11 +109,7 @@ def parse_band_order(raw_string: str) -> Tuple[Tuple[str, ...], str]:
 			if band not in seen:
 				seen.add(band)
 				unique_mapped.append(band)
-				# Normalize to simplified naming: lm->m, mh->m
-				if token in ('lm', 'mh'):
-					unique_tokens.append('m')
-				else:
-					unique_tokens.append(token)
+				unique_tokens.append(token)
 		
 		if unique_mapped:
 			return tuple(unique_mapped), ",".join(unique_tokens)
@@ -148,9 +129,6 @@ def config_to_dict(color_cfg: WaveformColorConfig, render_cfg: WaveformRenderCon
 			"overview_mode": color_cfg.overview_mode,
 			"stack_bands": color_cfg.stack_bands,
 			"blend_bands": color_cfg.blend_bands,
-			# Legacy color fields for compatibility
-			"lowmid_color": list(color_cfg.lowmid_color),
-			"midhigh_color": list(color_cfg.midhigh_color),
 		},
 		"render": {
 			"image_width": render_cfg.image_width,
@@ -170,11 +148,6 @@ def config_to_dict(color_cfg: WaveformColorConfig, render_cfg: WaveformRenderCon
 			"overview_low_gain": render_cfg.overview_low_gain,
 			"overview_mid_gain": render_cfg.overview_mid_gain,
 			"overview_high_gain": render_cfg.overview_high_gain,
-			# Legacy gain fields for compatibility
-			"lowmid_gain": render_cfg.lowmid_gain,
-			"midhigh_gain": render_cfg.midhigh_gain,
-			"overview_lowmid_gain": render_cfg.overview_lowmid_gain,
-			"overview_midhigh_gain": render_cfg.overview_midhigh_gain,
 		}
 	}
 
@@ -197,8 +170,6 @@ def dict_to_config(data: dict) -> tuple[WaveformColorConfig, WaveformRenderConfi
 		low_color=tuple(color_data.get("low_color", DEFAULT_COLOR_CONFIG.low_color)),
 		mid_color=tuple(color_data.get("mid_color", color_data.get("midhigh_color", DEFAULT_COLOR_CONFIG.mid_color))),
 		high_color=tuple(color_data.get("high_color", DEFAULT_COLOR_CONFIG.high_color)),
-		lowmid_color=tuple(color_data.get("lowmid_color", DEFAULT_COLOR_CONFIG.lowmid_color)),
-		midhigh_color=tuple(color_data.get("midhigh_color", DEFAULT_COLOR_CONFIG.midhigh_color)),
 		band_order_string_default=default_string,
 		band_order_string_overview=overview_string,
 		overview_mode=color_data.get("overview_mode", DEFAULT_COLOR_CONFIG.overview_mode),
@@ -230,16 +201,12 @@ def dict_to_config(data: dict) -> tuple[WaveformColorConfig, WaveformRenderConfi
 		low_gain=render_data.get("low_gain", DEFAULT_RENDER_CONFIG.low_gain),
 		mid_gain=render_data.get("mid_gain", render_data.get("midhigh_gain", DEFAULT_RENDER_CONFIG.mid_gain)),
 		high_gain=render_data.get("high_gain", DEFAULT_RENDER_CONFIG.high_gain),
-		lowmid_gain=render_data.get("lowmid_gain", DEFAULT_RENDER_CONFIG.lowmid_gain),
-		midhigh_gain=render_data.get("midhigh_gain", DEFAULT_RENDER_CONFIG.midhigh_gain),
 		prerender_detail=render_data.get("prerender_detail", DEFAULT_RENDER_CONFIG.prerender_detail),
 		deck_count=render_data.get("deck_count", DEFAULT_RENDER_CONFIG.deck_count),
 		render_mode=render_mode,
 		overview_low_gain=render_data.get("overview_low_gain", DEFAULT_RENDER_CONFIG.overview_low_gain),
 		overview_mid_gain=render_data.get("overview_mid_gain", render_data.get("overview_midhigh_gain", DEFAULT_RENDER_CONFIG.overview_mid_gain)),
 		overview_high_gain=render_data.get("overview_high_gain", DEFAULT_RENDER_CONFIG.overview_high_gain),
-		overview_lowmid_gain=render_data.get("overview_lowmid_gain", DEFAULT_RENDER_CONFIG.overview_lowmid_gain),
-		overview_midhigh_gain=render_data.get("overview_midhigh_gain", DEFAULT_RENDER_CONFIG.overview_midhigh_gain),
 	)
 	
 	return color_cfg, render_cfg

@@ -32,8 +32,6 @@ from typing import Callable, Dict, Iterable, Optional
 
 from pythonosc import dispatcher, osc_server
 
-from rb_waveform_core.ANLZ import analyze_anlz_folder
-
 DEBUG = False
 
 

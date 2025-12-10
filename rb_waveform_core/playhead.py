@@ -199,9 +199,6 @@ def ensure_prerender_cache(
     if not needs_prerender:
         return
     
-    from time import perf_counter
-    t0 = perf_counter()
-    
     cache.image = prerender_full_waveform(
         analysis,
         color_cfg,
@@ -212,7 +209,6 @@ def ensure_prerender_cache(
         show_beat_grid=show_beat_grid,
         scaled_seconds_per_bin=seconds_per_bin,  # Use original for full prerender
     )
-    t1 = perf_counter()
     
     cache.width = target_prerender_width
     cache.total_duration = max(total_duration, 1e-6)

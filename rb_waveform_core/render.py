@@ -19,11 +19,6 @@ def _band_array(analysis: WaveformAnalysis, name: str) -> np.ndarray:
 		return analysis.mid
 	if name == "high":
 		return analysis.high
-	# Legacy aliases for lab compatibility
-	if name == "lowmid":
-		return analysis.mid  # lowmid -> mid
-	if name == "midhigh":
-		return analysis.mid  # midhigh -> mid
 	raise ValueError(f"Unknown band name: {name}")
 
 
@@ -79,11 +74,11 @@ def _build_window_analysis(
 	
 	if use_overview_gains:
 		low_gain = getattr(render_cfg, "overview_low_gain", 1.0)
-		mid_gain = getattr(render_cfg, "overview_mid_gain", getattr(render_cfg, "overview_midhigh_gain", 1.0))
+		mid_gain = getattr(render_cfg, "overview_mid_gain", 1.0)
 		high_gain = getattr(render_cfg, "overview_high_gain", 1.0)
 	else:
 		low_gain = getattr(render_cfg, "low_gain", 1.0)
-		mid_gain = getattr(render_cfg, "mid_gain", getattr(render_cfg, "midhigh_gain", 1.0))
+		mid_gain = getattr(render_cfg, "mid_gain", 1.0)
 		high_gain = getattr(render_cfg, "high_gain", 1.0)
 	
 	low_processed = _apply_gain(_smooth_array(low, smoothing), low_gain)
@@ -143,9 +138,6 @@ def render_waveform_image(
 		"low": color_cfg.low_color,
 		"mid": color_cfg.mid_color,
 		"high": color_cfg.high_color,
-		# Legacy aliases (for lab compatibility)
-		"lowmid": color_cfg.lowmid_color,
-		"midhigh": color_cfg.midhigh_color,
 	}
 
 	# Use band_order directly - should be 3 bands (low, mid, high)
@@ -177,45 +169,28 @@ def render_waveform_image(
 				y1 = max(lane_top, lane_bottom - v)
 				draw.line((x, int(y0), x, int(y1)), fill=color, width=1)
 	elif color_cfg.overview_mode:
-		# Rekordbox-style stacked overview rendering
-		# Only works for 3 bands: low, mid, high
-		# Get arrays for each band
-		low_vals = np.clip(_band_array(analysis, "low"), 0.0, 1.0)
-		mid_vals = np.clip(_band_array(analysis, "mid"), 0.0, 1.0)
-		high_vals = np.clip(_band_array(analysis, "high"), 0.0, 1.0)
-		low_col = _average_columns(low_vals, column_start, column_end)
-		mid_col = _average_columns(mid_vals, column_start, column_end)
-		high_col = _average_columns(high_vals, column_start, column_end)
-		# Compute stacked heights
-		low_height = (low_col * usable_h).astype(int)
-		mid_height = ((low_col + mid_col) * usable_h).astype(int)
-		high_height = ((low_col + mid_col + high_col) * usable_h).astype(int)
-		# Draw low band (bottom)
-		for x in range(w):
-			v = low_height[x]
-			if v <= 0:
-				continue
-			y0 = h - margin
-			y1 = y0 - v
-			draw.line((x, int(y0), x, int(y1)), fill=band_color_map["low"], width=1)
-		# Draw mid band (middle, stacked on low)
-		for x in range(w):
-			v0 = low_height[x]
-			v1 = mid_height[x]
-			if v1 <= v0:
-				continue
-			y0 = h - margin - v0
-			y1 = h - margin - v1
-			draw.line((x, int(y0), x, int(y1)), fill=band_color_map["mid"], width=1)
-		# Draw high band (top, stacked on mid)
-		for x in range(w):
-			v0 = mid_height[x]
-			v1 = high_height[x]
-			if v1 <= v0:
-				continue
-			y0 = h - margin - v0
-			y1 = h - margin - v1
-			draw.line((x, int(y0), x, int(y1)), fill=band_color_map["high"], width=1)
+		# Rekordbox-style stacked overview rendering (3 bands: low, mid, high)
+		bands = ["low", "mid", "high"]
+		band_cols = [_average_columns(np.clip(_band_array(analysis, b), 0.0, 1.0), column_start, column_end) for b in bands]
+		
+		# Compute cumulative heights for stacking
+		cumulative = np.zeros(w, dtype=np.float32)
+		heights = []
+		for col in band_cols:
+			prev = cumulative.copy()
+			cumulative += col
+			heights.append(((prev * usable_h).astype(int), (cumulative * usable_h).astype(int)))
+		
+		# Draw each band from bottom to top
+		for i, band_name in enumerate(bands):
+			prev_h, curr_h = heights[i]
+			color = band_color_map[band_name]
+			for x in range(w):
+				if curr_h[x] <= prev_h[x]:
+					continue
+				y0 = h - margin - prev_h[x]
+				y1 = h - margin - curr_h[x]
+				draw.line((x, int(y0), x, int(y1)), fill=color, width=1)
 	else:
 		# Overlaid/symmetric (non-overview) mode
 		for band_name in render_band_order:
