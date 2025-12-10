@@ -1,5 +1,22 @@
 # Copyright (c) mrmilbe
 
+"""PIL image generation from WaveformAnalysis data.
+
+Position in data flow:
+    playhead.py → render.py → PIL Image
+
+Responsibilities:
+    - Convert 3-band float arrays to colored vertical lines
+    - Handle overview/stacked/symmetric render modes
+    - Draw beat grid markers on waveform
+    - Provide fast crop from prerendered images
+
+Key rendering modes:
+    - overview_mode: Rekordbox-style stacked from bottom (low→mid→high)
+    - stack_bands: Horizontal lanes, one per band
+    - default: Symmetric around center line, bands overlaid back-to-front
+"""
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -112,6 +129,18 @@ def render_waveform_image(
 	show_beat_grid: bool = False,
 	seconds_per_bin: float = 0.0,
 ) -> Image.Image:
+	"""Render WaveformAnalysis bands to a PIL Image.
+	
+	Data flow: WaveformAnalysis (3 float arrays) → ImageDraw.line() per column → PIL Image
+	
+	The function:
+	    1. Maps bins to pixel columns via np.linspace
+	    2. Averages values within each column range
+	    3. Draws vertical lines per column per band
+	    4. Optionally overlays beat grid markers
+	
+	Rendering mode is determined by color_cfg.overview_mode and color_cfg.stack_bands.
+	"""
 
 	w = render_cfg.image_width
 	h = render_cfg.image_height
@@ -246,6 +275,13 @@ def render_waveform_window(
 	show_beat_grid: bool = False,
 	scaled_seconds_per_bin: Optional[float] = None,
 ) -> Image.Image:
+	"""Render a specific window of the waveform.
+	
+	Data flow: WaveformAnalysis → _build_window_analysis() → render_waveform_image()
+	
+	Extracts bins [start_bin : start_bin + window_bins], applies smoothing and gain,
+	then renders. Used for live rendering when prerender cache is bypassed.
+	"""
 	# Use scaled timing for waveform rendering, original timing for beat grid
 	render_spb = scaled_seconds_per_bin if scaled_seconds_per_bin is not None else seconds_per_bin
 	use_overview_gains = getattr(color_cfg, "overview_mode", False)
@@ -264,6 +300,13 @@ def prerender_full_waveform(
 	show_beat_grid: bool = False,
 	scaled_seconds_per_bin: Optional[float] = None,
 ) -> Image.Image:
+	"""Render entire track at high resolution for caching.
+	
+	Data flow: WaveformAnalysis → render_waveform_window(0, n_bins) → PIL Image
+	
+	The result is stored in PrerenderCache and cropped via crop_prerendered_image()
+	for each frame during playback - much faster than re-rendering.
+	"""
 	width = max(1, int(target_width))
 	temp_cfg = replace(render_cfg, image_width=width)
 	n_bins = len(analysis.low)

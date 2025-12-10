@@ -1,6 +1,26 @@
 # Copyright (c) mrmilbe
 
-"""Minimal Rekordbox ANLZ helpers for PWV7 waveform extraction."""
+"""Rekordbox ANLZ file parsing for waveform and beat grid extraction.
+
+Position in data flow:
+    ANLZ folder (.DAT/.EXT/.2EX files) → ANLZ.py → analysis.py → WaveformAnalysis
+
+Responsibilities:
+    - Parse ANLZ files via pyrekordbox library
+    - Extract PWV7 tag (high-res waveform: N×3 uint8 array at 150 fps)
+    - Extract PPTH tag (audio file path)
+    - Extract PQTZ tag (beat grid with time/beat_number/bpm)
+    - Extract PCOB tag (hot cues - debug only)
+
+File priority:
+    - PWV7 waveform: .2EX preferred (has extended color data)
+    - Beat grid: .DAT preferred (authoritative beat data)
+
+Usage:
+    result = analyze_anlz_folder(folder)
+    analysis = analysis_from_rb_waveform(result.waveform, result.duration)
+    beat_grid = extract_beat_grid(folder)
+"""
 
 from __future__ import annotations
 

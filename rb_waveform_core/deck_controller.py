@@ -1,5 +1,16 @@
 # Copyright (c) mrmilbe
 
+"""Deck controller - orchestrates single-deck state and rendering.
+
+Position in data flow:
+    GUI (rkbx_wave.py) → DeckController → playhead.py → render.py
+
+Responsibilities:
+    - Load ANLZ folder and extract waveform/beat grid
+    - Track live playback time and BPM from OSC
+    - Coordinate render calls and manage prerender cache
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -51,6 +62,17 @@ class DeckController:
     # Loading
     # ------------------------------------------------------------------
     def load_anlz(self, folder: Path) -> None:
+        """Load ANLZ folder and initialize deck state.
+        
+        Data flow: ANLZ folder → AnlzAnalysisResult → WaveformAnalysis + beat grid.
+        Resets prerender cache to force fresh render on next frame.
+        
+        Args:
+            folder: Path to Rekordbox ANLZ folder containing .DAT/.EXT/.2EX files.
+        
+        Raises:
+            FileNotFoundError: If folder doesn't exist.
+        """
         folder = Path(folder)
         if not folder.is_dir():
             raise FileNotFoundError(f"ANLZ folder not found: {folder}")
@@ -76,9 +98,19 @@ class DeckController:
     # Live updates
     # ------------------------------------------------------------------
     def update_time(self, time_seconds: Optional[float]) -> None:
+        """Update current playback position from OSC. Does not trigger render."""
         self.current_time = time_seconds
 
     def update_live_bpm(self, bpm: Optional[float]) -> bool:
+        """Update live BPM and recalculate time scale.
+        
+        When live BPM differs from original (tempo change), time_scale adjusts
+        so waveform scrolls at correct speed. Invalidates prerender cache if
+        scale changes significantly.
+        
+        Returns:
+            True if cache was invalidated (requires re-render).
+        """
         changed = False
         if bpm is not None:
             try:
@@ -117,6 +149,18 @@ class DeckController:
         preview_height: int,
         zoom_seconds: float,
         color_cfg,
+        # Args continue below - docstring here:
+        # """Render waveform window for current playback position.
+        # 
+        # Data flow:
+        #     1. compute_timing_info() → timing metadata
+        #     2. compute_window_plan() → which bins are visible
+        #     3. render_window_image() → PIL image (from cache or live render)
+        #     4. finalize_preview_image() → scaled to canvas + playhead line
+        # 
+        # Returns:
+        #     RenderResult with PIL image and timing info for overlay.
+        # """
         render_cfg,
         beat_grid_enabled: bool,
     ) -> RenderResult:

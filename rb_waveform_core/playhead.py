@@ -1,5 +1,17 @@
 # Copyright (c) mrmilbe
 
+"""Window planning and timing calculations for waveform display.
+
+Position in data flow:
+    deck_controller.py → playhead.py → render.py
+
+Responsibilities:
+    - Compute timing info from WaveformAnalysis (duration, bins, seconds_per_bin)
+    - Plan visible window based on zoom level and playhead position
+    - Manage prerender cache for fast scrolling
+    - Finalize images with resize and playhead line
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -94,6 +106,23 @@ def compute_window_plan(
     link_time: Optional[float],
     link_scale: float,
 ) -> WindowPlan:
+    """Plan which portion of the waveform to render.
+    
+    Data flow: TimingInfo + GUI state → WindowPlan (start_bin, window_bins, playhead_fraction).
+    
+    Args:
+        total_duration: Track duration in seconds.
+        n_bins: Total bins in waveform array.
+        seconds_per_bin: Time per bin (constant from ANLZ).
+        window_duration: Visible window duration from zoom slider.
+        pan_fraction: Manual pan position (0.0-1.0) when not following link.
+        link_follow: If True, center window on link_time.
+        link_time: Current playback position from OSC.
+        link_scale: BPM ratio (live_bpm / original_bpm) for tempo scaling.
+    
+    Returns:
+        WindowPlan with start_bin, window_bins, and playhead positioning.
+    """
     sec_per_bin = seconds_per_bin if seconds_per_bin > 1e-9 else 1e-9
     total_duration = max(total_duration, sec_per_bin)
     n_bins = max(1, n_bins)
@@ -181,6 +210,18 @@ def ensure_prerender_cache(
     show_beat_grid: bool = False,
     link_scale: float = 1.0,
 ) -> None:
+    """Build full-track prerender if cache is stale.
+    
+    Data flow: WaveformAnalysis → prerender_full_waveform() → PrerenderCache.image
+    
+    The prerender is a high-resolution PIL Image of the entire track. During playback,
+    crop_prerendered_image() extracts the visible window - much faster than re-rendering.
+    
+    Cache invalidation triggers:
+        - cache.dirty flag set (e.g., config change)
+        - Width mismatch (window resize)
+        - seconds_per_bin changed (different track)
+    """
     # Fixed-resolution prerender: BPM must not change full-track width.
     # Zoom and BPM only decide which time window we crop from this image.
     BASE_PIXELS_PER_SECOND = 25.0
@@ -233,6 +274,19 @@ def render_window_image(
     beat_grid: Optional[list] = None,
     show_beat_grid: bool = False,
 ) -> Tuple[Image.Image, PrerenderCache]:
+    """Render the visible waveform window.
+    
+    Data flow:
+        Cache path: PrerenderCache.image → crop_prerendered_image() → cropped Image
+        Live path:  WaveformAnalysis → render_waveform_window() → Image
+    
+    Args:
+        use_live_render: If True, render directly from analysis (for antialiased mode).
+                        If False, use prerender cache with fast cropping.
+    
+    Returns:
+        (image, updated_cache) tuple.
+    """
     if use_live_render:
         # Live render: analysis is the antialiased visible window (starts at bin 0)
         # Render the entire window since it's already extracted and downsampled

@@ -51,6 +51,53 @@ LIBRARY_SEARCH_ROOT: Optional[Path] = Path(r"C:\Rekordbox")
 if not LIBRARY_SEARCH_ROOT.is_dir():
     LIBRARY_SEARCH_ROOT = None
 
+
+# ---------------------------------------------------------------------------
+# Tooltip helper class
+# ---------------------------------------------------------------------------
+class ToolTip:
+    """Simple tooltip that appears on hover after a short delay."""
+    
+    def __init__(self, widget: tk.Widget, text: str, delay: int = 500):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.tip_window: Optional[tk.Toplevel] = None
+        self.scheduled_id: Optional[str] = None
+        widget.bind("<Enter>", self._schedule_show)
+        widget.bind("<Leave>", self._hide)
+        widget.bind("<ButtonPress>", self._hide)
+    
+    def _schedule_show(self, event=None) -> None:
+        self._cancel_scheduled()
+        self.scheduled_id = self.widget.after(self.delay, self._show)
+    
+    def _cancel_scheduled(self) -> None:
+        if self.scheduled_id:
+            self.widget.after_cancel(self.scheduled_id)
+            self.scheduled_id = None
+    
+    def _show(self, event=None) -> None:
+        if self.tip_window:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(
+            tw, text=self.text, justify="left", background="#ffffe0",
+            relief="solid", borderwidth=1, font=("Segoe UI", 9)
+        )
+        label.pack()
+    
+    def _hide(self, event=None) -> None:
+        self._cancel_scheduled()
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
+
+
 # User config directory in AppData
 USER_CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home())) / "rkbx_wave"
 USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -230,31 +277,42 @@ class WaveformSyncApp:
         
         tune_btn = ttk.Button(controls, text="Tune", command=self._toggle_tune_panel)
         tune_btn.pack(side="left", padx=(0, 8))
+        ToolTip(tune_btn, "Open/close tuning panel for smoothing, gains, and render mode")
+        
         load_btn = ttk.Button(controls, text="Load Config", command=self._on_load_config)
         load_btn.pack(side="left", padx=(0, 2))
+        ToolTip(load_btn, "Load waveform color/render settings from a JSON file")
+        
         save_btn = ttk.Button(controls, text="Save Config", command=self._on_save_config)
         save_btn.pack(side="left", padx=(0, 8))
+        ToolTip(save_btn, "Save current waveform settings to a JSON file")
         
-        ttk.Checkbutton(
+        overview_cb = ttk.Checkbutton(
             controls,
             text="Overview Mode",
             variable=self.overview_var,
             command=self._on_visual_change,
-        ).pack(side="left", padx=(0, 8))
+        )
+        overview_cb.pack(side="left", padx=(0, 8))
+        ToolTip(overview_cb, "Rekordbox-style overview, band order adjustable h)")
         
-        ttk.Checkbutton(
+        stack_cb = ttk.Checkbutton(
             controls,
             text="Stack Bands",
             variable=self.stack_bands_var,
             command=self._on_visual_change,
-        ).pack(side="left", padx=(0, 8))
+        )
+        stack_cb.pack(side="left", padx=(0, 8))
+        ToolTip(stack_cb, "Show each band in its own horizontal lane")
         
-        ttk.Checkbutton(
+        beatgrid_cb = ttk.Checkbutton(
             controls,
             text="Beat Grid",
             variable=self.beat_grid_var,
             command=self._on_visual_change,
-        ).pack(side="left", padx=(0, 8))
+        )
+        beatgrid_cb.pack(side="left", padx=(0, 8))
+        ToolTip(beatgrid_cb, "Show downbeat markers (bar boundaries) on the waveform")
         
         ttk.Label(controls, text="Zoom:").pack(side="left", padx=(8, 4))
         zoom_slider = ttk.Scale(
@@ -267,6 +325,7 @@ class WaveformSyncApp:
         )
         zoom_slider.pack(side="left", padx=(0, 8))
         zoom_slider.configure(length=150)
+        ToolTip(zoom_slider, "Visible time window: left=0.5s (zoomed in), right=120s (zoomed out)")
         
         ttk.Label(controls, textvariable=self.link_status_var).pack(side="right")
         
@@ -322,6 +381,7 @@ class WaveformSyncApp:
         )
         render_mode_combo.grid(row=row, column=1, sticky="w", padx=8, pady=2)
         render_mode_combo.bind("<<ComboboxSelected>>", lambda e: self._on_render_mode_change())
+        ToolTip(render_mode_combo, "Waveform render height:\nlow=32px, medium=63px, high=127px\nHigher = more detail, more GPU load")
         row += 1
         
         # Separator
@@ -334,6 +394,7 @@ class WaveformSyncApp:
         band_order_entry.grid(row=row, column=1, sticky="w", padx=8, pady=2)
         band_order_entry.bind("<Return>", lambda e: self._on_band_order_change())
         band_order_entry.bind("<FocusOut>", lambda e: self._on_band_order_change())
+        ToolTip(band_order_entry, "Drawing order (back→front): l=low, m=mid, h=high\nExample: 'l,m,h' draws low first, high on top")
         row += 1
         
         # Band order hint
@@ -355,6 +416,7 @@ class WaveformSyncApp:
         smoothing_scale.grid(row=row, column=0, columnspan=2, sticky="ew", padx=8, pady=1)
         smoothing_scale.bind("<ButtonRelease-1>", lambda e: self._on_smoothing_change())
         smoothing_scale.bind("<B1-Motion>", lambda e: self._on_smoothing_change())  # Live update while dragging
+        ToolTip(smoothing_scale, "Moving average window (bins): higher = smoother waveform\nOverview mode uses separate smoothing setting")
         row += 1
         
         # Separator
@@ -372,6 +434,7 @@ class WaveformSyncApp:
         low_scale.grid(row=row, column=1, sticky="w", padx=8, pady=1)
         low_scale.bind("<ButtonRelease-1>", lambda e: self._on_gain_change())
         low_scale.bind("<B1-Motion>", lambda e: self._on_gain_change())  # Live update while dragging
+        ToolTip(low_scale, "Low frequency band amplitude multiplier (0–3×)")
         row += 1
         
         # Mid gain slider  
@@ -380,6 +443,7 @@ class WaveformSyncApp:
         mid_scale.grid(row=row, column=1, sticky="w", padx=8, pady=1)
         mid_scale.bind("<ButtonRelease-1>", lambda e: self._on_gain_change())
         mid_scale.bind("<B1-Motion>", lambda e: self._on_gain_change())  # Live update while dragging
+        ToolTip(mid_scale, "Mid frequency band amplitude multiplier (0–3×)")
         row += 1
         
         # High gain slider
@@ -388,6 +452,7 @@ class WaveformSyncApp:
         high_scale.grid(row=row, column=1, sticky="w", padx=8, pady=1)
         high_scale.bind("<ButtonRelease-1>", lambda e: self._on_gain_change())
         high_scale.bind("<B1-Motion>", lambda e: self._on_gain_change())  # Live update while dragging
+        ToolTip(high_scale, "High frequency band amplitude multiplier (0–3×)")
         row += 1
         
         # Separator
