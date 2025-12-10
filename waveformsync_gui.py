@@ -206,18 +206,24 @@ class WaveformSyncApp:
         self.waveform_area.columnconfigure(0, weight=1)
         self.waveform_area.bind("<Configure>", self._on_waveform_area_resize)
         
-        # Deck displays (up to deck_count)
-        self.deck_labels = {}
+        # Deck displays (up to deck_count) - use Canvas for hardware-accelerated scaling
+        self.deck_canvases = {}
+        self.deck_canvas_images = {}  # Store canvas image IDs for updates
         self.deck_infos = {}
         for i in range(self.deck_count):
-            # Waveform label row gets weight to expand vertically
+            # Waveform canvas row gets weight to expand vertically
             self.waveform_area.rowconfigure(2 * i, weight=1)
-            self.deck_labels[i] = ttk.Label(self.waveform_area, relief="flat", background="black")
-            self.deck_labels[i].grid(row=2 * i, column=0, sticky="nsew", pady=(2, 1))
+            canvas = tk.Canvas(self.waveform_area, bg="black", highlightthickness=0)
+            canvas.grid(row=2 * i, column=0, sticky="nsew", pady=(2, 1))
+            self.deck_canvases[i] = canvas
+            self.deck_canvas_images[i] = None
             # Info label row stays fixed height
             self.waveform_area.rowconfigure(2 * i + 1, weight=0)
             self.deck_infos[i] = ttk.Label(self.waveform_area, text=f"Deck {i+1}: No track loaded", anchor="w", style="Black.TLabel")
             self.deck_infos[i].grid(row=2 * i + 1, column=0, sticky="ew", pady=(0, 2))
+        
+        # Keep deck_labels as alias for compatibility
+        self.deck_labels = self.deck_canvases
     
     def _build_tune_panel(self) -> None:
         """Build the tuning subpanel contents."""
@@ -600,20 +606,19 @@ class WaveformSyncApp:
         except Exception as e:
             print(f"[Deck {deck_num}] Failed to load ANLZ: {e}")
     
-    def _render_deck(self, ctrl: DeckController, label: ttk.Label, deck_num: int) -> None:
+    def _render_deck(self, ctrl: DeckController, label, deck_num: int) -> None:
         """Render waveform for a specific deck via DeckController."""
         if ctrl.analysis is None:
             return
 
-        preview_w = max(400, label.winfo_width() or 800)
-        # Calculate height from waveform_area, divided by deck_count, minus info label space
-        area_height = self.waveform_area.winfo_height()
-        if area_height > 0:
-            # Subtract ~25px per deck for info labels, divide remaining space
-            available_height = area_height - (self.deck_count * 25)
-            preview_h = max(64, available_height // self.deck_count)
-        else:
-            preview_h = 128  # Default fallback
+        canvas = self.deck_canvases[deck_num]
+        canvas_w = max(400, canvas.winfo_width() or 800)
+        canvas_h = max(64, canvas.winfo_height() or 128)
+        
+        # Use canvas width for render, but fixed height from RenderMode
+        preview_w = canvas_w
+        # preview_h is determined by RenderMode in deck_controller, we just pass display height
+        preview_h = canvas_h
 
         zoom_step = int(max(0, min(NUM_ZOOM_STEPS, self.zoom_var.get())))
         window_seconds = float(ZOOM_LEVELS_SECONDS[zoom_step])
@@ -633,9 +638,19 @@ class WaveformSyncApp:
             beat_grid_enabled=bool(self.beat_grid_var.get()),
         )
 
+        # Create PhotoImage from rendered image (at fixed render height)
         img_tk = ImageTk.PhotoImage(result.image)
         self.deck_images_tk[deck_num] = img_tk
-        label.configure(image=img_tk)
+        
+        # Update canvas - clear old image and create new one centered/stretched
+        canvas.delete("all")
+        # Place image at center of canvas - canvas will clip if image is larger
+        # For vertical scaling: image is at fixed height, canvas shows it at its natural size
+        # The image width matches canvas width, so horizontal is 1:1
+        # Vertical: image is smaller, centered in canvas
+        img_x = canvas_w // 2
+        img_y = canvas_h // 2
+        self.deck_canvas_images[deck_num] = canvas.create_image(img_x, img_y, image=img_tk, anchor="center")
     
     def _on_close(self) -> None:
         """Clean up on window close."""
