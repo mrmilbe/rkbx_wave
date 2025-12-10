@@ -6,12 +6,23 @@ Displays two decks vertically with live waveform sync.
 Uses saved configuration files for waveform rendering.
 
 Run with:
-    python waveformsync_gui.py
+    python rkbx_wave.py
+    or
+    rkbx_wave (after pip install)
 """
 
 from __future__ import annotations
 
+import sys
+
+# Windows-only check
+if sys.platform != "win32":
+    print("Error: rkbx_wave is Windows-only due to rkbx_link.exe dependency.")
+    print("This application requires Windows to communicate with Rekordbox.")
+    sys.exit(1)
+
 import json
+import shutil
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 from pathlib import Path
@@ -40,8 +51,65 @@ LIBRARY_SEARCH_ROOT: Optional[Path] = Path(r"C:\Rekordbox")
 if not LIBRARY_SEARCH_ROOT.is_dir():
     LIBRARY_SEARCH_ROOT = None
 
-LAST_CONFIG_PATH = Path("last_config.txt")
-DEFAULT_CONFIG_PATH = Path("waveform_config.json")
+# User config directory in AppData
+USER_CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home())) / "rkbx_wave"
+USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+LAST_CONFIG_PATH = USER_CONFIG_DIR / "last_config.txt"
+USER_DEFAULT_CONFIG_PATH = USER_CONFIG_DIR / "default_config.json"
+
+
+def _get_package_data_path() -> Path:
+    """Get path to package data directory (installed or development)."""
+    # Try installed location first (sys.prefix/rkbx_wave_data)
+    installed_path = Path(sys.prefix) / "rkbx_wave_data"
+    if installed_path.exists():
+        return installed_path
+    # Fall back to development directory (next to this file)
+    return Path(__file__).parent
+
+
+def _get_default_config_path() -> Path:
+    """Get path to default_config.json, copying to AppData if needed."""
+    # If user already has a copy in AppData, use it
+    if USER_DEFAULT_CONFIG_PATH.exists():
+        return USER_DEFAULT_CONFIG_PATH
+    
+    # Try to copy from package data to AppData
+    package_config = _get_package_data_path() / "default_config.json"
+    if package_config.exists():
+        try:
+            shutil.copy2(package_config, USER_DEFAULT_CONFIG_PATH)
+            print(f"[Config] Copied default config to {USER_DEFAULT_CONFIG_PATH}")
+            return USER_DEFAULT_CONFIG_PATH
+        except Exception as e:
+            print(f"[Config] Failed to copy default config: {e}")
+            return package_config
+    
+    # Last resort: return path even if doesn't exist (will use hardcoded defaults)
+    return USER_DEFAULT_CONFIG_PATH
+
+
+def _get_rkbx_link_path() -> tuple[Path, Path]:
+    """Get rkbx_link directory and executable path."""
+    # Try installed location first
+    installed_path = Path(sys.prefix) / "rkbx_wave_data" / "rkbx_link"
+    if installed_path.exists():
+        exe_path = installed_path / "rkbx_link.exe"
+        if exe_path.exists():
+            return installed_path, exe_path
+    
+    # Fall back to development directory
+    dev_dir = Path(__file__).parent / "rkbx_link"
+    if dev_dir.exists():
+        exe_path = dev_dir / "rkbx_link.exe"
+        if exe_path.exists():
+            return dev_dir, exe_path
+    
+    # Return expected path (will fail at runtime if not found)
+    return dev_dir, dev_dir / "rkbx_link.exe"
+
+
+DEFAULT_CONFIG_PATH = _get_default_config_path()
 
 # Match tuning_gui: discrete zoom levels in seconds
 ZOOM_LEVELS_SECONDS = [256, 196, 128, 96, 64, 48, 32, 24, 16]
@@ -54,10 +122,17 @@ class WaveformSyncApp:
         self.root.title("WaveformSync - Dual Deck Display")
         
         # Start rkbx_link.exe
-        rkbx_link_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'rkbx_link'))
+        rkbx_link_dir, rkbx_link_exe = _get_rkbx_link_path()
+        if not rkbx_link_exe.exists():
+            messagebox.showerror(
+                "Missing Dependency",
+                f"rkbx_link.exe not found at:\n{rkbx_link_exe}\n\n"
+                "Please ensure the package was installed correctly."
+            )
+            sys.exit(1)
         self.rkbx_link_proc = subprocess.Popen(
-            [os.path.join(rkbx_link_dir, 'rkbx_link.exe')],
-            cwd=rkbx_link_dir
+            [str(rkbx_link_exe)],
+            cwd=str(rkbx_link_dir)
         )
         
         # Shared config (loaded from file)

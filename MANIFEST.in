@@ -1,0 +1,42 @@
+# Include essential files
+include LICENSE
+include README.md
+include default_config.json
+include requirements.txt
+
+# Include rb_waveform_core package
+recursive-include rb_waveform_core *.py
+
+# Include rkbx_link with all contents
+recursive-include rkbx_link *
+
+# Exclude lab/experimental code
+prune rb_waveform_lab
+
+# Exclude development/debug files
+global-exclude 2ex_*.py
+global-exclude add_copyright.py
+global-exclude *_test.py
+global-exclude test_*.py
+
+# Exclude Python cache and compiled files
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so
+global-exclude *.pyd
+
+# Exclude virtual environment
+prune rkbx_wavw_venv
+
+# Exclude git and IDE files
+global-exclude .git*
+global-exclude .vscode
+global-exclude *.swp
+global-exclude *~
+
+# Exclude development documentation
+exclude CORE_LAB_SPLIT_CHECKLIST.md
+exclude CORE_LAB_SPLIT_SUMMARY.md
+
+# Exclude user state files
+exclude last_config.txt
