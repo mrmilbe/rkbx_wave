@@ -6,6 +6,9 @@ Real-time waveform display for Rekordbox DJ with zoom levels beyond the standard
 ![Python 3.9+](https://img.shields.io/badge/python-3.9+-green)
 ![License MIT](https://img.shields.io/badge/license-MIT-lightgrey)
 
+<img width="1685" height="885" alt="1" src="https://github.com/user-attachments/assets/0c474fbf-998c-4223-9e6e-f10f381998a3" />
+
+
 ## Features
 
 - Dual deck waveform display synced with Rekordbox in real-time
