@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Optional
 import os
 
-from rb_waveform_gpu import WaveformGpuWindow, DeckFrame
+from rb_waveform_core.rb_waveform_gpu import WaveformGpuWindow, DeckFrame
 
 from rb_waveform_core.config import (
     DEFAULT_COLOR_CONFIG,
