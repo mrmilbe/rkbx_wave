@@ -13,7 +13,7 @@ Responsibilities:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -30,6 +30,7 @@ from .playhead import (
     render_window_image,
     reset_prerender_cache,
 )
+from .render import prerender_full_waveform
 
 
 @dataclass
@@ -82,7 +83,8 @@ class DeckController:
         self.cached_waveform = info.waveform
         self.cached_duration = info.duration
         self.song_name = info.song_path.stem if info.song_path else "Unknown"
-        self.resolved_audio_path = resolve_audio_path(info.song_path, self.library_root)
+        print(f"folder={folder}, path={info.song_path}")
+        self.resolved_audio_path = resolve_audio_path(info.song_path, folder, self.library_root)
 
         self.analysis = analysis_from_rb_waveform(self.cached_waveform, self.cached_duration)
 
@@ -103,13 +105,16 @@ class DeckController:
 
     def update_live_bpm(self, bpm: Optional[float]) -> bool:
         """Update live BPM and recalculate time scale.
-        
+
         When live BPM differs from original (tempo change), time_scale adjusts
-        so waveform scrolls at correct speed. Invalidates prerender cache if
-        scale changes significantly.
-        
+        so the waveform scrolls at the correct speed. This only affects which
+        time window gets cropped from the prerender (via compute_window_plan),
+        NOT the prerender itself - the full-track prerender is fixed-resolution
+        and BPM-independent, so we must NOT invalidate the cache here. Doing so
+        rebuilt the entire prerender on every BPM jitter (~14x slower playback).
+
         Returns:
-            True if cache was invalidated (requires re-render).
+            True if the time scale changed (the next render reflects it).
         """
         changed = False
         if bpm is not None:
@@ -120,7 +125,6 @@ class DeckController:
             new_scale = _compute_time_scale(self.original_bpm, self.current_bpm)
             if new_scale is not None and not _nearly_equal(new_scale, self.time_scale, 1e-3):
                 self.time_scale = new_scale
-                reset_prerender_cache(self.prerender_cache)
                 changed = True
         return changed
 
@@ -136,8 +140,9 @@ class DeckController:
             return False
         if _nearly_equal(new_scale, self.time_scale, 1e-3):
             return False
+        # BPM-independent prerender: update scale only, do not rebuild the cache
+        # (see update_live_bpm). The next render crops the correct window.
         self.time_scale = new_scale
-        reset_prerender_cache(self.prerender_cache)
         return True
 
     # ------------------------------------------------------------------
@@ -206,6 +211,61 @@ class DeckController:
             interpolation=render_cfg.render_mode.get_interpolation(),
         )
         return RenderResult(image=img, plan_start_time=plan.start_time, plan_window_duration=plan.window_duration)
+
+    # ------------------------------------------------------------------
+    # GPU display support
+    # ------------------------------------------------------------------
+    def get_total_duration(self) -> float:
+        """Track duration in seconds (0 if no track loaded)."""
+        if self.analysis is None:
+            return 0.0
+        timing = compute_timing_info(self.analysis, fallback_duration=self.cached_duration or 0.0)
+        return timing.total_duration
+
+    def get_downbeat_times(self) -> list:
+        """Downbeat (bar start) times in seconds, for the GPU beat overlay."""
+        if not self.beat_grid_downbeats:
+            return []
+        return [float(getattr(e, "time_ms", 0)) / 1000.0 for e in self.beat_grid_downbeats]
+
+    def build_full_track_image(
+        self,
+        color_cfg,
+        render_cfg,
+        *,
+        height: int,
+        pixels_per_second: float,
+        reduce: str = "max",
+    ) -> Optional[Tuple[Image.Image, float, float]]:
+        """Render the entire track to one PIL image for GPU texture upload.
+
+        This is the texture source: built once per track / config / zoom change
+        (not per frame). The GPU scrolls/zooms a sub-rectangle of it. Beat markers
+        are NOT baked here - they are drawn as crisp per-frame overlay lines so
+        they never sub-pixel-vanish. ``reduce="max"`` preserves waveform peaks when
+        downsampled (avoids the zoomed-out shimmer / wash-out).
+
+        Returns (image, pixels_per_second, total_duration), or None if no track.
+        """
+        if self.analysis is None:
+            return None
+        timing = compute_timing_info(self.analysis, fallback_duration=self.cached_duration or 0.0)
+        if timing.n_bins == 0 or timing.total_duration <= 0:
+            return None
+        target_width = max(1, int(round(timing.total_duration * float(pixels_per_second))))
+        cfg = replace(render_cfg, image_height=int(height))
+        image = prerender_full_waveform(
+            self.analysis,
+            color_cfg,
+            cfg,
+            seconds_per_bin=timing.seconds_per_bin,
+            target_width=target_width,
+            beat_grid=None,
+            show_beat_grid=False,
+            scaled_seconds_per_bin=timing.seconds_per_bin,
+            reduce=reduce,
+        )
+        return image, float(pixels_per_second), float(timing.total_duration)
 
 
 # ----------------------------------------------------------------------

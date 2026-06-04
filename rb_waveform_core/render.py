@@ -121,6 +121,21 @@ def _average_columns(values: np.ndarray, start_idx: np.ndarray, end_idx: np.ndar
 	return (sums / lengths).astype(np.float32)
 
 
+def _max_columns(values: np.ndarray, start_idx: np.ndarray) -> np.ndarray:
+	"""Peak (max) value per column - preserves transients/peaks under downsampling.
+
+	Mean reduction washes out sharp peaks when many bins map to one pixel (zoomed
+	out), making the waveform shimmer and look thin. Peak reduction keeps each
+	column at the loudest sample it covers, which is how DJ overviews stay "full".
+	"""
+	if values.size == 0 or start_idx.size == 0:
+		return np.zeros_like(start_idx, dtype=np.float32)
+	float_vals = np.asarray(values, dtype=np.float32)
+	idx = np.clip(start_idx, 0, len(float_vals) - 1)
+	# reduceat computes max over [idx[i], idx[i+1]); last segment runs to the end.
+	return np.maximum.reduceat(float_vals, idx).astype(np.float32)
+
+
 def render_waveform_image(
 	analysis: WaveformAnalysis,
 	color_cfg: WaveformColorConfig,
@@ -128,6 +143,7 @@ def render_waveform_image(
 	beat_grid: Optional[list] = None,
 	show_beat_grid: bool = False,
 	seconds_per_bin: float = 0.0,
+	reduce: str = "mean",
 ) -> Image.Image:
 	"""Render WaveformAnalysis bands to a PIL Image.
 	
@@ -146,22 +162,28 @@ def render_waveform_image(
 	h = render_cfg.image_height
 	margin = render_cfg.margin_px
 
-	img = Image.new("RGB", (w, h), color_cfg.low_color if False else render_cfg.background_color)
-	draw = ImageDraw.Draw(img)
-
 	usable_h = h - 2 * margin
 	center_y = h // 2
 	half_h = usable_h // 2
 
 	n_bins = len(analysis.low)
 	if n_bins == 0:
-		return img
+		return Image.new("RGB", (w, h), render_cfg.background_color)
 
 	column_edges = np.linspace(0.0, n_bins, w + 1)
 	column_start = np.floor(column_edges[:-1]).astype(int)
 	column_end = np.ceil(column_edges[1:]).astype(int)
 	column_start = np.clip(column_start, 0, max(0, n_bins - 1))
 	column_end = np.clip(column_end, column_start + 1, n_bins)
+
+	# Column reducer: "max" preserves peaks (crisp, full waveform when downsampled),
+	# "mean" is the smoother classic look. See _max_columns / _average_columns.
+	if reduce == "max":
+		def _reduce(vals: np.ndarray) -> np.ndarray:
+			return _max_columns(vals, column_start)
+	else:
+		def _reduce(vals: np.ndarray) -> np.ndarray:
+			return _average_columns(vals, column_start, column_end)
 
 	band_color_map = {
 		"low": color_cfg.low_color,
@@ -175,65 +197,86 @@ def render_waveform_image(
 	if len(render_band_order) > 3:
 		render_band_order = render_band_order[:3]
 	elif len(render_band_order) == 0:
-		return img
+		return Image.new("RGB", (w, h), render_cfg.background_color)
 
-	if color_cfg.stack_bands:
-		# ...existing code for stack_bands...
+	# Vectorized fill: instead of one ImageDraw.line() per column per band
+	# (O(width) Python calls), paint each band's vertical spans into a single
+	# uint8 palette-index map, then expand to RGB in one shot. Writing 1 byte
+	# per pixel (vs 3) and avoiding per-column Python keeps the whole prerender
+	# in NumPy. Later bands overwrite earlier ones, matching the draw order.
+	rows = np.arange(h, dtype=np.int32)[:, None]
+	idx_map = np.zeros((h, w), dtype=np.uint8)
+	palette = [tuple(render_cfg.background_color)]
+
+	if getattr(color_cfg, "rgb_mode", False):
+		# RGB / colour waveform: per-column hue = additive mix of the three RGB band
+		# colours (low/mid/high), then normalized to full saturation so the hue is
+		# vivid regardless of loudness (amplitude is shown by bar height, not
+		# brightness). With saturated primaries this spans the spectrum like
+		# rekordbox, instead of averaging toward grey.
+		low_c = _reduce(np.clip(analysis.low, 0.0, 1.0))
+		mid_c = _reduce(np.clip(analysis.mid, 0.0, 1.0))
+		high_c = _reduce(np.clip(analysis.high, 0.0, 1.0))
+		col_low = np.asarray(getattr(color_cfg, "rgb_low_color", color_cfg.low_color), dtype=np.float32)
+		col_mid = np.asarray(getattr(color_cfg, "rgb_mid_color", color_cfg.mid_color), dtype=np.float32)
+		col_high = np.asarray(getattr(color_cfg, "rgb_high_color", color_cfg.high_color), dtype=np.float32)
+		add = low_c[:, None] * col_low + mid_c[:, None] * col_mid + high_c[:, None] * col_high  # (w, 3)
+		peak = np.max(add, axis=1, keepdims=True)  # (w, 1)
+		colors = np.where(peak > 1e-6, add / peak * 255.0, 0.0)
+		colors = np.clip(colors, 0.0, 255.0).astype(np.uint8)        # (w, 3)
+		env = np.clip(np.maximum.reduce([low_c, mid_c, high_c]), 0.0, 1.0)
+		heights = (env * half_h).astype(np.int32)
+		dist = np.abs(rows - center_y)
+		mask = (heights > 0)[None, :] & (dist <= heights[None, :])   # (h, w)
+		bg = np.asarray(render_cfg.background_color, dtype=np.uint8)
+		arr = np.where(mask[:, :, None], colors[None, :, :], bg[None, None, :]).astype(np.uint8)
+	elif color_cfg.stack_bands:
 		band_count = len(render_band_order)
-		if band_count == 0:
-			return img
 		lane_height = usable_h // band_count
 		for idx, band_name in enumerate(render_band_order):
 			vals = np.clip(_band_array(analysis, band_name), 0.0, 1.0)
-			column_values = _average_columns(vals, column_start, column_end)
-			heights = (column_values * lane_height).astype(int)
-			color = band_color_map[band_name]
+			column_values = _reduce(vals)
+			heights = (column_values * lane_height).astype(np.int32)
 			lane_top = margin + idx * lane_height
 			lane_bottom = lane_top + lane_height
-			for x in range(w):
-				v = heights[x]
-				if v <= 0:
-					continue
-				y0 = lane_bottom
-				y1 = max(lane_top, lane_bottom - v)
-				draw.line((x, int(y0), x, int(y1)), fill=color, width=1)
+			top = np.maximum(lane_top, lane_bottom - heights)
+			# Fill rows [top, lane_bottom] for columns with a positive height.
+			mask = (heights > 0)[None, :] & (rows >= top[None, :]) & (rows <= lane_bottom)
+			palette.append(tuple(band_color_map[band_name]))
+			idx_map[mask] = len(palette) - 1
 	elif color_cfg.overview_mode:
 		# Rekordbox-style stacked overview rendering (3 bands: low, mid, high)
 		bands = ["low", "mid", "high"]
-		band_cols = [_average_columns(np.clip(_band_array(analysis, b), 0.0, 1.0), column_start, column_end) for b in bands]
-		
-		# Compute cumulative heights for stacking
+		band_cols = [_reduce(np.clip(_band_array(analysis, b), 0.0, 1.0)) for b in bands]
+
+		# Stack bands cumulatively from the bottom margin upward.
 		cumulative = np.zeros(w, dtype=np.float32)
-		heights = []
-		for col in band_cols:
-			prev = cumulative.copy()
-			cumulative += col
-			heights.append(((prev * usable_h).astype(int), (cumulative * usable_h).astype(int)))
-		
-		# Draw each band from bottom to top
-		for i, band_name in enumerate(bands):
-			prev_h, curr_h = heights[i]
-			color = band_color_map[band_name]
-			for x in range(w):
-				if curr_h[x] <= prev_h[x]:
-					continue
-				y0 = h - margin - prev_h[x]
-				y1 = h - margin - curr_h[x]
-				draw.line((x, int(y0), x, int(y1)), fill=color, width=1)
+		for band_name, col in zip(bands, band_cols):
+			prev = cumulative
+			cumulative = cumulative + col
+			prev_h = (prev * usable_h).astype(np.int32)
+			curr_h = (cumulative * usable_h).astype(np.int32)
+			top = (h - margin) - curr_h
+			bottom = (h - margin) - prev_h
+			mask = (curr_h > prev_h)[None, :] & (rows >= top[None, :]) & (rows <= bottom[None, :])
+			palette.append(tuple(band_color_map[band_name]))
+			idx_map[mask] = len(palette) - 1
 	else:
-		# Overlaid/symmetric (non-overview) mode
+		# Overlaid/symmetric (non-overview) mode: mirror each band around center.
+		dist = np.abs(rows - center_y)
 		for band_name in render_band_order:
 			vals = np.clip(_band_array(analysis, band_name), 0.0, 1.0)
-			column_values = _average_columns(vals, column_start, column_end)
-			color = band_color_map[band_name]
-			heights = (column_values * half_h).astype(int)
-			for x in range(w):
-				v = heights[x]
-				if v <= 0:
-					continue
-				y0 = center_y + v
-				y1 = center_y - v
-				draw.line((x, int(y0), x, int(y1)), fill=color, width=1)
+			column_values = _reduce(vals)
+			heights = (column_values * half_h).astype(np.int32)
+			mask = (heights > 0)[None, :] & (dist <= heights[None, :])
+			palette.append(tuple(band_color_map[band_name]))
+			idx_map[mask] = len(palette) - 1
+
+	if not getattr(color_cfg, "rgb_mode", False):
+		palette_arr = np.array(palette, dtype=np.uint8)
+		arr = palette_arr[idx_map]
+	img = Image.fromarray(arr, "RGB")
+	draw = ImageDraw.Draw(img)
 
 	if render_cfg.center_line:
 		draw.line((0, center_y, w, center_y), fill=(40, 40, 40), width=1)
@@ -274,11 +317,12 @@ def render_waveform_window(
 	beat_grid: Optional[list] = None,
 	show_beat_grid: bool = False,
 	scaled_seconds_per_bin: Optional[float] = None,
+	reduce: str = "mean",
 ) -> Image.Image:
 	"""Render a specific window of the waveform.
-	
+
 	Data flow: WaveformAnalysis → _build_window_analysis() → render_waveform_image()
-	
+
 	Extracts bins [start_bin : start_bin + window_bins], applies smoothing and gain,
 	then renders. Used for live rendering when prerender cache is bypassed.
 	"""
@@ -286,7 +330,7 @@ def render_waveform_window(
 	render_spb = scaled_seconds_per_bin if scaled_seconds_per_bin is not None else seconds_per_bin
 	use_overview_gains = getattr(color_cfg, "overview_mode", False)
 	window_analysis = _build_window_analysis(analysis, render_cfg, start_bin, window_bins, render_spb, use_overview_gains)
-	return render_waveform_image(window_analysis, color_cfg, render_cfg, beat_grid=beat_grid, show_beat_grid=show_beat_grid, seconds_per_bin=seconds_per_bin)
+	return render_waveform_image(window_analysis, color_cfg, render_cfg, beat_grid=beat_grid, show_beat_grid=show_beat_grid, seconds_per_bin=seconds_per_bin, reduce=reduce)
 
 
 def prerender_full_waveform(
@@ -299,6 +343,7 @@ def prerender_full_waveform(
 	beat_grid: Optional[list] = None,
 	show_beat_grid: bool = False,
 	scaled_seconds_per_bin: Optional[float] = None,
+	reduce: str = "mean",
 ) -> Image.Image:
 	"""Render entire track at high resolution for caching.
 	
@@ -322,6 +367,7 @@ def prerender_full_waveform(
 		beat_grid=beat_grid,
 		show_beat_grid=show_beat_grid,
 		scaled_seconds_per_bin=scaled_seconds_per_bin,
+		reduce=reduce,
 	)
 
 

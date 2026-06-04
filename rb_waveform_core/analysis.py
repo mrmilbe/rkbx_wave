@@ -83,6 +83,7 @@ def analysis_from_rb_waveform(
 
 def resolve_audio_path(
 	raw_rb_path: Optional[Path],
+	folder: Optional[Path] = None,
 	library_search_root: Optional[Path] = None
 ) -> Optional[Path]:
 	"""Resolve Rekordbox's raw PPTH path to actual audio file.
@@ -100,12 +101,22 @@ def resolve_audio_path(
 	# Try the raw path as-is (Windows path might work directly)
 	if raw_rb_path.is_file():
 		return raw_rb_path
+
+	# If the raw path is absolute but missing a drive letter (Windows \path),
+	# try prepending the drive from the provided `folder`.
+	# Example: folder=D:\PIONEER\USBANLZ\P042\00018016,
+	# raw_rb_path=\Contents\Artist\Track.mp3 -> try D:\Contents\Artist\Track.mp3
+	candidate = Path(folder.drive + str(raw_rb_path))
+	if candidate.is_file():
+		print(f"Resolved {raw_rb_path} to {candidate} by prepending drive from {folder}.")
+		return candidate
 	
 	# If library search root provided, try finding by filename
 	if library_search_root and library_search_root.is_dir():
 		target_name = raw_rb_path.name
 		for candidate in library_search_root.rglob("*"):
 			if candidate.is_file() and candidate.name == target_name:
+				print(f"Resolved {raw_rb_path} to {candidate} by filename search.")
 				return candidate
 	
 	return None

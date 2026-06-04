@@ -44,9 +44,17 @@ class WaveformColorConfig:
     mid_color: Tuple[int, int, int] = (150, 90, 40)  # Mid frequencies
     high_color: Tuple[int, int, int] = (255, 255, 255)
 
+    # RGB-mode band colours (separate from the 3-band display colours). Defaults
+    # to saturated primaries (low=red, mid=green, high=blue) like a rekordbox
+    # colour waveform; blended per column they span the whole spectrum.
+    rgb_low_color: Tuple[int, int, int] = (255, 50, 50)
+    rgb_mid_color: Tuple[int, int, int] = (40, 220, 70)
+    rgb_high_color: Tuple[int, int, int] = (60, 120, 255)
+
     band_order: Tuple[str, ...] = ("low", "mid", "high")  # 3-band default
     overview_mode: bool = False  # asymmetric multi-band overview vs symmetric
     stack_bands: bool = False    # true vertical stacking (no overlap)
+    rgb_mode: bool = False       # single waveform colored by per-column band blend
     blend_bands: bool = True
     band_order_string_default: str = "h,m,l"  # default for normal mode
     band_order_string_overview: str = "l,m,h"  # default for overview mode
@@ -124,10 +132,14 @@ def config_to_dict(color_cfg: WaveformColorConfig, render_cfg: WaveformRenderCon
 			"low_color": list(color_cfg.low_color),
 			"mid_color": list(color_cfg.mid_color),
 			"high_color": list(color_cfg.high_color),
+			"rgb_low_color": list(color_cfg.rgb_low_color),
+			"rgb_mid_color": list(color_cfg.rgb_mid_color),
+			"rgb_high_color": list(color_cfg.rgb_high_color),
 			"band_order_string_default": color_cfg.band_order_string_default,
 			"band_order_string_overview": color_cfg.band_order_string_overview,
 			"overview_mode": color_cfg.overview_mode,
 			"stack_bands": color_cfg.stack_bands,
+			"rgb_mode": color_cfg.rgb_mode,
 			"blend_bands": color_cfg.blend_bands,
 		},
 		"render": {
@@ -170,10 +182,14 @@ def dict_to_config(data: dict) -> tuple[WaveformColorConfig, WaveformRenderConfi
 		low_color=tuple(color_data.get("low_color", DEFAULT_COLOR_CONFIG.low_color)),
 		mid_color=tuple(color_data.get("mid_color", color_data.get("midhigh_color", DEFAULT_COLOR_CONFIG.mid_color))),
 		high_color=tuple(color_data.get("high_color", DEFAULT_COLOR_CONFIG.high_color)),
+		rgb_low_color=tuple(color_data.get("rgb_low_color", DEFAULT_COLOR_CONFIG.rgb_low_color)),
+		rgb_mid_color=tuple(color_data.get("rgb_mid_color", DEFAULT_COLOR_CONFIG.rgb_mid_color)),
+		rgb_high_color=tuple(color_data.get("rgb_high_color", DEFAULT_COLOR_CONFIG.rgb_high_color)),
 		band_order_string_default=default_string,
 		band_order_string_overview=overview_string,
 		overview_mode=color_data.get("overview_mode", DEFAULT_COLOR_CONFIG.overview_mode),
 		stack_bands=color_data.get("stack_bands", DEFAULT_COLOR_CONFIG.stack_bands),
+		rgb_mode=color_data.get("rgb_mode", DEFAULT_COLOR_CONFIG.rgb_mode),
 		blend_bands=color_data.get("blend_bands", DEFAULT_COLOR_CONFIG.blend_bands),
 	)
 	# Parse band order from the appropriate mode string

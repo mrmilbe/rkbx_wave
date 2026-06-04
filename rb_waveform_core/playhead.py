@@ -224,9 +224,13 @@ def ensure_prerender_cache(
     """
     # Fixed-resolution prerender: BPM must not change full-track width.
     # Zoom and BPM only decide which time window we crop from this image.
+    # The prerender is kept high-resolution (oversampled vs the display) so the
+    # per-frame crop+resize antialiases the scroll smoothly and beat markers land
+    # at consistent spacing. Dropping the resolution to avoid the resize makes the
+    # waveform snap to source pixels and the beat grid jitter.
     BASE_PIXELS_PER_SECOND = 25.0
     calculated_width = int(total_duration * BASE_PIXELS_PER_SECOND)
-	
+
     # Clamp to reasonable bounds
     max_detail = getattr(render_cfg, "prerender_detail", 20000)
     target_prerender_width = max(preview_width, min(calculated_width, max_detail))
