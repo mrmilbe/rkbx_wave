@@ -44,6 +44,7 @@ If this project saves you time, you can support it here:
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="45">
 </a>
 
+I'm actually trying to drink less coffee, but I can get some okay bottom-shelf booze for $5.
 
 ## Installation
 
