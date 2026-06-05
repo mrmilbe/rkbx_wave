@@ -25,6 +25,8 @@ scrolling waveform window follows your decks live.
 - Always-on-top, borderless overlay mode
 - Save / load configuration profiles
 
+
+
 ## Requirements
 
 - **Windows 10 / 11** (Rekordbox memory access is Windows-only)
@@ -33,6 +35,15 @@ scrolling waveform window follows your decks live.
 - **Rekordbox 7.2.2** is supported out of the box.
   [How to install a specific Rekordbox 7 version](https://rekordbox.com/en/support/faq/v7/)
   (other versions need a one-time offset file — see *Other Rekordbox versions* below).
+
+## Support
+
+If this project saves you time, you can support it here:
+
+<a href="https://www.buymeacoffee.com/MrMilbe">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="45">
+</a>
+
 
 ## Installation
 
@@ -144,3 +155,5 @@ MIT License — see [LICENSE](LICENSE).
 
 - [pyrekordbox](https://github.com/dylanljones/pyrekordbox) — ANLZ / database parsing
 - Memory-offset format and approach inspired by [rkbx_link](https://github.com/grufkork/rkbx_link)
+
+
