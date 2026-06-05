@@ -43,6 +43,7 @@ class _DeckTexture:
     pixels_per_second: float
     total_duration: float
     downbeats: tuple = ()   # downbeat times in seconds (drawn as overlay lines)
+    cues: tuple = ()        # (time_sec, (r,g,b), is_memory) cue markers
 
 
 @dataclass
@@ -64,6 +65,9 @@ class WaveformGpuWindow:
         background: Tuple[int, int, int] = (5, 5, 5),
         playhead_color: Tuple[int, int, int] = (255, 0, 0),
         beat_color: Tuple[int, int, int] = (235, 235, 235),
+        beat_end_color: Tuple[int, int, int] = (255, 60, 60),
+        beat_width: float = 2.0,
+        beat_triangles: bool = False,
         vsync: bool = False,
         borderless: bool = True,
         always_on_top: bool = True,
@@ -73,6 +77,9 @@ class WaveformGpuWindow:
         self.background = pygame.Color(*background)
         self.playhead_color = pygame.Color(*playhead_color)
         self.beat_color = pygame.Color(*beat_color)
+        self.beat_end_color = pygame.Color(*beat_end_color)
+        self._beat_width = float(beat_width)
+        self._beat_triangles = bool(beat_triangles)
         self.on_close = on_close
         self._closed = False
         self._title = "rkbx_wave — Waveforms"
@@ -97,11 +104,15 @@ class WaveformGpuWindow:
         try:
             pygame.font.init()
             self._font = pygame.font.SysFont("Arial", 14)
+            self._cue_font = pygame.font.SysFont("Arial", 11, bold=True)
         except Exception:
             self._font = None
+            self._cue_font = None
         self._label_cache: dict[str, Texture] = {}
+        self._cue_label_cache: dict = {}  # (letter, fg) -> Texture
 
         self._beat_tex = self._make_beat_texture()
+        self._tri_top, self._tri_bottom = self._make_triangle_textures()
         self._decks: dict[int, Optional[_DeckTexture]] = {i: None for i in range(self.deck_count)}
 
         # Apply always-on-top via Win32 (the SDL flag is unreliable on Windows).
@@ -186,6 +197,44 @@ class WaveformGpuWindow:
         except Exception:
             return None
 
+    def _make_triangle_textures(self):
+        """Two small triangles in the end-marker colour: one pointing down (drawn at
+        the top of the beat line) and one pointing up (drawn at the bottom), like the
+        red markers Rekordbox draws at the ends of each beat line."""
+        try:
+            c = self.beat_end_color
+            w, h = 9, 6
+            top = pygame.Surface((w, h), pygame.SRCALPHA)      # apex pointing down
+            pygame.draw.polygon(top, (c.r, c.g, c.b, 255), [(0, 0), (w - 1, 0), ((w - 1) / 2, h - 1)])
+            bottom = pygame.Surface((w, h), pygame.SRCALPHA)   # apex pointing up
+            pygame.draw.polygon(bottom, (c.r, c.g, c.b, 255), [(0, h - 1), (w - 1, h - 1), ((w - 1) / 2, 0)])
+            tt = Texture.from_surface(self.renderer, top)
+            bt = Texture.from_surface(self.renderer, bottom)
+            tt.blend_mode = pygame.BLENDMODE_BLEND
+            bt.blend_mode = pygame.BLENDMODE_BLEND
+            return tt, bt
+        except Exception:
+            return None, None
+
+    def set_beat_style(
+        self,
+        color: Optional[Tuple[int, int, int]] = None,
+        end_color: Optional[Tuple[int, int, int]] = None,
+        width: Optional[float] = None,
+        triangles: Optional[bool] = None,
+    ) -> None:
+        """Update beat line colour / end-marker colour / width / markers live (cheap)."""
+        if color is not None:
+            self.beat_color = pygame.Color(*color)
+            self._beat_tex = self._make_beat_texture()
+        if end_color is not None:
+            self.beat_end_color = pygame.Color(*end_color)
+            self._tri_top, self._tri_bottom = self._make_triangle_textures()
+        if width is not None:
+            self._beat_width = max(0.5, float(width))
+        if triangles is not None:
+            self._beat_triangles = bool(triangles)
+
     # ------------------------------------------------------------------
     # Texture management (called on track load / config change)
     # ------------------------------------------------------------------
@@ -212,6 +261,7 @@ class WaveformGpuWindow:
         pixels_per_second: float,
         total_duration: float,
         downbeats_sec: Sequence[float] = (),
+        cues: Sequence = (),
     ) -> None:
         """Upload a full-track waveform image to a GPU texture for the given deck."""
         if deck_idx not in self._decks:
@@ -223,6 +273,7 @@ class WaveformGpuWindow:
             pixels_per_second=float(pixels_per_second),
             total_duration=max(float(total_duration), 1e-6),
             downbeats=tuple(float(t) for t in downbeats_sec),
+            cues=tuple(cues),
         )
 
     def clear_track(self, deck_idx: int) -> None:
@@ -273,12 +324,41 @@ class WaveformGpuWindow:
             # at float x so they glide sub-pixel-smoothly with the waveform.
             if deck.downbeats and self._beat_tex is not None:
                 lo, hi = start_time, start_time + visible
-                bw = 2.0
+                bw = self._beat_width
+                draw_tris = self._beat_triangles and self._tri_top is not None
                 for bt in deck.downbeats:
                     if bt < lo or bt > hi:
                         continue
                     bx = (bt - start_time) * px_per_sec
                     self._beat_tex.draw(dstrect=(bx - bw / 2.0, 0.0, bw, vh))
+                    if draw_tris:
+                        tw, th = self._tri_top.width, self._tri_top.height
+                        self._tri_top.draw(dstrect=(bx - tw / 2.0, 0.0, tw, th))
+                        self._tri_bottom.draw(dstrect=(bx - tw / 2.0, vh - th, tw, th))
+
+            # Cue markers: a vertical line in the cue colour, with a small flag at the
+            # top. Hot cues get a thicker line + larger flag; memory cues a thinner one.
+            if deck.cues:
+                lo, hi = start_time, start_time + visible
+                for ct, color, is_memory, number in deck.cues:
+                    if ct < lo or ct > hi:
+                        continue
+                    cx = (ct - start_time) * px_per_sec
+                    self.renderer.draw_color = pygame.Color(*color)
+                    lw = 1.0 if is_memory else 2.0
+                    self.renderer.fill_rect((cx - lw / 2.0, 0.0, lw, vh))
+                    # Square marker at the top, centred on the cue line (double height).
+                    sq = 10.0 if is_memory else 14.0
+                    self.renderer.fill_rect((cx - sq / 2.0, 0.0, sq, sq))
+                    # Hot cues (A-H): draw the slot letter inside the square, in a
+                    # contrasting colour (black on light fills, white on dark).
+                    if not is_memory and 1 <= number <= 8:
+                        fg = (0, 0, 0) if (color[0] + color[1] + color[2]) > 384 else (255, 255, 255)
+                        lt = self._cue_letter_texture("ABCDEFGH"[number - 1], fg)
+                        if lt is not None:
+                            lx = cx - lt.width / 2.0
+                            ly = (sq - lt.height) / 2.0
+                            lt.draw(dstrect=(lx, ly, lt.width, lt.height))
 
             # Playhead: fixed at viewport center (link-follow keeps current_time there).
             cx = viewport.width / 2.0
@@ -286,6 +366,19 @@ class WaveformGpuWindow:
             self.renderer.fill_rect((cx - 0.5, 0.0, 1.0, vh))
         finally:
             self.renderer.set_viewport(prev_vp)
+
+    def _cue_letter_texture(self, letter: str, fg: Tuple[int, int, int]):
+        """Cached small bold letter texture for a hot-cue square (A-H)."""
+        if self._cue_font is None:
+            return None
+        key = (letter, fg)
+        tex = self._cue_label_cache.get(key)
+        if tex is None:
+            surf = self._cue_font.render(letter, True, fg)
+            tex = Texture.from_surface(self.renderer, surf)
+            tex.blend_mode = pygame.BLENDMODE_BLEND
+            self._cue_label_cache[key] = tex
+        return tex
 
     def _draw_label(self, text: str, viewport: pygame.Rect) -> None:
         if self._font is None:

@@ -22,6 +22,7 @@ from PIL import Image
 
 from .ANLZ import analyze_anlz_folder, extract_beat_grid
 from .analysis import WaveformAnalysis, analysis_from_rb_waveform, resolve_audio_path
+from .cues import CueMarker, get_track_cues
 from .playhead import (
     PrerenderCache,
     compute_timing_info,
@@ -53,6 +54,7 @@ class DeckController:
         self.analysis: Optional[WaveformAnalysis] = None
         self.beat_grid_full: Optional[list] = None
         self.beat_grid_downbeats: Optional[list] = None
+        self.cues: list = []
         self.original_bpm: Optional[float] = None
         self.current_bpm: Optional[float] = None
         self.time_scale: float = 1.0
@@ -90,6 +92,7 @@ class DeckController:
 
         self.beat_grid_full = extract_beat_grid(folder)
         self.beat_grid_downbeats = _downbeats_only(self.beat_grid_full)
+        self.cues = get_track_cues(folder)
         self.original_bpm = _infer_original_bpm(self.beat_grid_full)
         self.current_bpm = self.original_bpm
         self.time_scale = 1.0
@@ -227,6 +230,10 @@ class DeckController:
         if not self.beat_grid_downbeats:
             return []
         return [float(getattr(e, "time_ms", 0)) / 1000.0 for e in self.beat_grid_downbeats]
+
+    def get_cue_markers(self) -> list:
+        """Cue markers as (time_sec, (r,g,b), is_memory, number) tuples for the GPU."""
+        return [(c.time_sec, c.color, c.is_memory, c.number) for c in self.cues]
 
     def build_full_track_image(
         self,

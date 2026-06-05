@@ -1,5 +1,17 @@
+# Virtual environments
 rkbx_wavw_venv/
-rb_waveform_lab/__pycache__/
-rb_waveform_core/__pycache__/
+venv_rkbx/
 TEST/
-__pycache__
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# User runtime state
+last_config.txt
+profile.svg

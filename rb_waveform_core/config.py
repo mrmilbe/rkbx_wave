@@ -54,10 +54,14 @@ class WaveformColorConfig:
     band_order: Tuple[str, ...] = ("low", "mid", "high")  # 3-band default
     overview_mode: bool = False  # asymmetric multi-band overview vs symmetric
     stack_bands: bool = False    # true vertical stacking (no overlap)
-    rgb_mode: bool = False       # single waveform colored by per-column band blend
+    rgb_mode: bool = True        # single waveform colored by per-column band blend
     blend_bands: bool = True
     band_order_string_default: str = "h,m,l"  # default for normal mode
     band_order_string_overview: str = "l,m,h"  # default for overview mode
+    # Beat grid marker colour (downbeat lines)
+    beat_color: Tuple[int, int, int] = (235, 235, 235)
+    # Beat end-marker (RB-style triangle) colour — independent of the line colour
+    beat_end_color: Tuple[int, int, int] = (255, 60, 60)
 
 
 @dataclass
@@ -77,6 +81,14 @@ class WaveformRenderConfig:
 	prerender_detail: int = 20000  # Max prerender width in pixels
 	deck_count: int = 2  # Number of decks to display in GUI
 	render_mode: RenderMode = RenderMode.DEFAULT
+	# Beat grid marker geometry
+	beat_width: float = 2.0          # on-screen width of each beat line, in pixels
+	beat_triangles: bool = False     # draw RB-style end markers at top/bottom of beats
+	# Global zoom hotkeys, as Windows virtual-key codes (default numpad + / -).
+	# Common: numpad+ = 0x6B, numpad- = 0x6D, '+' = 0xBB, '-' = 0xBD, PgUp = 0x21,
+	# PgDn = 0x22. Edit here to remap, or assign in the Tune panel.
+	zoom_in_key: int = 0x6B
+	zoom_out_key: int = 0x6D
 	# Overview mode gains (3-band)
 	overview_low_gain: float = 1.0
 	overview_mid_gain: float = 1.0
@@ -141,6 +153,8 @@ def config_to_dict(color_cfg: WaveformColorConfig, render_cfg: WaveformRenderCon
 			"stack_bands": color_cfg.stack_bands,
 			"rgb_mode": color_cfg.rgb_mode,
 			"blend_bands": color_cfg.blend_bands,
+			"beat_color": list(color_cfg.beat_color),
+			"beat_end_color": list(color_cfg.beat_end_color),
 		},
 		"render": {
 			"image_width": render_cfg.image_width,
@@ -157,6 +171,10 @@ def config_to_dict(color_cfg: WaveformColorConfig, render_cfg: WaveformRenderCon
 			"prerender_detail": render_cfg.prerender_detail,
 			"deck_count": render_cfg.deck_count,
 			"render_mode": render_cfg.render_mode.value,
+			"beat_width": render_cfg.beat_width,
+			"beat_triangles": render_cfg.beat_triangles,
+			"zoom_in_key": render_cfg.zoom_in_key,
+			"zoom_out_key": render_cfg.zoom_out_key,
 			"overview_low_gain": render_cfg.overview_low_gain,
 			"overview_mid_gain": render_cfg.overview_mid_gain,
 			"overview_high_gain": render_cfg.overview_high_gain,
@@ -191,6 +209,8 @@ def dict_to_config(data: dict) -> tuple[WaveformColorConfig, WaveformRenderConfi
 		stack_bands=color_data.get("stack_bands", DEFAULT_COLOR_CONFIG.stack_bands),
 		rgb_mode=color_data.get("rgb_mode", DEFAULT_COLOR_CONFIG.rgb_mode),
 		blend_bands=color_data.get("blend_bands", DEFAULT_COLOR_CONFIG.blend_bands),
+		beat_color=tuple(color_data.get("beat_color", DEFAULT_COLOR_CONFIG.beat_color)),
+		beat_end_color=tuple(color_data.get("beat_end_color", DEFAULT_COLOR_CONFIG.beat_end_color)),
 	)
 	# Parse band order from the appropriate mode string
 	if color_cfg.overview_mode:
@@ -220,6 +240,10 @@ def dict_to_config(data: dict) -> tuple[WaveformColorConfig, WaveformRenderConfi
 		prerender_detail=render_data.get("prerender_detail", DEFAULT_RENDER_CONFIG.prerender_detail),
 		deck_count=render_data.get("deck_count", DEFAULT_RENDER_CONFIG.deck_count),
 		render_mode=render_mode,
+		beat_width=render_data.get("beat_width", DEFAULT_RENDER_CONFIG.beat_width),
+		beat_triangles=render_data.get("beat_triangles", DEFAULT_RENDER_CONFIG.beat_triangles),
+		zoom_in_key=render_data.get("zoom_in_key", DEFAULT_RENDER_CONFIG.zoom_in_key),
+		zoom_out_key=render_data.get("zoom_out_key", DEFAULT_RENDER_CONFIG.zoom_out_key),
 		overview_low_gain=render_data.get("overview_low_gain", DEFAULT_RENDER_CONFIG.overview_low_gain),
 		overview_mid_gain=render_data.get("overview_mid_gain", render_data.get("overview_midhigh_gain", DEFAULT_RENDER_CONFIG.overview_mid_gain)),
 		overview_high_gain=render_data.get("overview_high_gain", DEFAULT_RENDER_CONFIG.overview_high_gain),

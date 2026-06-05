@@ -43,7 +43,6 @@ Pointer = Tuple[List[int], int]
 # Candidate locations for the version-keyed offsets file (first existing wins).
 _OFFSETS_FILE_CANDIDATES = [
     Path(__file__).parent / "data" / "offsets",          # packaged with the lib
-    Path(__file__).parent.parent / "rkbx_link" / "data" / "offsets",  # dev fallback
 ]
 
 

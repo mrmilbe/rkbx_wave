@@ -1,17 +1,18 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "rkbx_wave"
-version = "1.0.0"
-description = "Dual deck waveform display for Rekordbox with live sync via rkbx_link"
+version = "1.1.0"
+description = "Real-time, zoomable multi-deck waveform display for Rekordbox (reads Rekordbox memory directly)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 authors = [
     {name = "mrmilbe"}
 ]
+keywords = ["rekordbox", "dj", "waveform", "pioneer", "cdj"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: End Users/Desktop",
@@ -26,13 +27,13 @@ classifiers = [
 ]
 dependencies = [
     "Pillow>=10.0.0",
-    "construct>=2.10.0",
-    "mutagen>=1.47.0",
     "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pygame>=2.6.0",
+    "pymem>=1.13",
     "psutil>=5.9.0",
     "pyrekordbox>=0.4.0",
     "python-osc>=1.9.0",
-    "scipy>=1.10.0",
 ]
 
 [project.urls]
@@ -45,3 +46,7 @@ rkbx_wave = "rkbx_wave:main"
 [tool.setuptools]
 py-modules = ["rkbx_wave"]
 packages = ["rb_waveform_core"]
+
+[tool.setuptools.package-data]
+# Ship the version-keyed memory offsets and the default config with the wheel.
+rb_waveform_core = ["data/offsets", "data/default_config.json"]

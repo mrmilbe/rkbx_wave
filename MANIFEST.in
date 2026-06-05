@@ -1,46 +1,27 @@
-#pip install --upgrade build setuptools wheel
-#python -m build --wheel
+# Build a wheel with:  pip install --upgrade build  &&  python -m build --wheel
 
-# Include essential files
 include LICENSE
 include README.md
-include default_config.json
 
-# Include rb_waveform_core package
+# The package + its bundled data (memory offsets + default config)
 recursive-include rb_waveform_core *.py
+include rb_waveform_core/data/offsets
+include rb_waveform_core/data/default_config.json
 
-# Include rkbx_link with all contents
-recursive-include rkbx_link *
-
-# Exclude lab/experimental code
+# Keep experimental / maintenance code out of the distribution (stays in git)
 prune rb_waveform_lab
+prune rb_offset_detect
 
-# Exclude development/debug files
-global-exclude 2ex_*.py
-global-exclude add_copyright.py
-global-exclude *_test.py
-global-exclude test_*.py
-
-# Exclude Python cache and compiled files
+# Caches, envs, IDE, user state
 global-exclude __pycache__
 global-exclude *.py[cod]
 global-exclude *.so
 global-exclude *.pyd
-
-# Exclude virtual environment
 prune rkbx_wavw_venv
 prune TEST
-
-# Exclude git and IDE files
 global-exclude .git*
-global-exclude .vscode
 global-exclude *.swp
 global-exclude *~
-global-exclude requirements.txt
-
-# Exclude development documentation
-exclude CORE_LAB_SPLIT_CHECKLIST.md
-exclude CORE_LAB_SPLIT_SUMMARY.md
-
-# Exclude user state files
 exclude last_config.txt
+exclude profile.svg
+exclude requirements.txt

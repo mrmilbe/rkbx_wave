@@ -21,6 +21,7 @@ if sys.platform != "win32":
     print("This application requires Windows to communicate with Rekordbox.")
     sys.exit(1)
 
+import ctypes
 import json
 import shutil
 import time
@@ -105,13 +106,12 @@ USER_DEFAULT_CONFIG_PATH = USER_CONFIG_DIR / "default_config.json"
 
 
 def _get_package_data_path() -> Path:
-    """Get path to package data directory (installed or development)."""
-    # Try installed location first (sys.prefix/rkbx_wave_data)
-    installed_path = Path(sys.prefix) / "rkbx_wave_data"
-    if installed_path.exists():
-        return installed_path
-    # Fall back to development directory (next to this file)
-    return Path(__file__).parent
+    """Path to the bundled package data (rb_waveform_core/data).
+
+    Works both from a source checkout and an installed wheel: rkbx_wave.py sits
+    next to the rb_waveform_core package in either case.
+    """
+    return Path(__file__).parent / "rb_waveform_core" / "data"
 
 
 def _get_default_config_path() -> Path:
@@ -141,6 +141,27 @@ DEFAULT_CONFIG_PATH = _get_default_config_path()
 # Match tuning_gui: discrete zoom levels in seconds
 ZOOM_LEVELS_SECONDS = [256, 196, 128, 96, 64, 48, 32, 24, 16]
 NUM_ZOOM_STEPS = len(ZOOM_LEVELS_SECONDS) - 1
+
+# Friendly labels for Windows virtual-key codes used by the zoom hotkeys.
+_VK_NAMES = {
+    0x6B: "Num +", 0x6D: "Num -", 0x6A: "Num *", 0x6F: "Num /",
+    0xBB: "+", 0xBD: "-", 0x21: "PgUp", 0x22: "PgDn",
+    0x26: "Up", 0x28: "Down", 0x25: "Left", 0x27: "Right",
+    0x20: "Space", 0x09: "Tab",
+}
+
+
+def _vk_label(vk: int) -> str:
+    """Human-readable label for a Windows virtual-key code."""
+    if vk in _VK_NAMES:
+        return _VK_NAMES[vk]
+    if 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A:  # 0-9, A-Z
+        return chr(vk)
+    if 0x60 <= vk <= 0x69:  # numpad 0-9
+        return f"Num {vk - 0x60}"
+    if 0x70 <= vk <= 0x7B:  # F1-F12
+        return f"F{vk - 0x6F}"
+    return f"0x{vk:02X}"
 
 # GPU waveform window: the full-track texture is built once per track/config.
 # Height is the texture's vertical resolution (GPU scales it to the viewport).
@@ -189,8 +210,15 @@ class WaveformSyncApp:
         # UI variables
         self.overview_var = tk.BooleanVar(value=False)
         self.stack_bands_var = tk.BooleanVar(value=False)
-        self.rgb_var = tk.BooleanVar(value=False)  # RGB (per-column band blend) waveform
+        self.rgb_var = tk.BooleanVar(value=True)  # RGB (per-column band blend) waveform, on by default
         self.beat_grid_var = tk.BooleanVar(value=True)  # Enable beat grid by default
+        self.cue_var = tk.BooleanVar(value=True)  # Show hot + memory cue markers
+        # Beat-grid marker style (live overlay, synced from config)
+        self.beat_width_var = tk.DoubleVar(value=self.render_cfg.beat_width)
+        self.beat_triangles_var = tk.BooleanVar(value=self.render_cfg.beat_triangles)
+        # Global zoom hotkeys (work while Rekordbox is focused); keys come from config
+        self.numpad_zoom_var = tk.BooleanVar(value=True)
+        self._zoom_key_down = {"in": False, "out": False}
         # GPU waveform window options. Border ON by default so the window has a real
         # titlebar and is natively movable/resizable; turn it off for a clean overlay
         # (borderless can't be dragged - reposition with the border on first).
@@ -214,17 +242,19 @@ class WaveformSyncApp:
         self._create_gpu_window()
         self._start_link_listener()
 
-        # Calculate window size based on screen and content
-        screen_width = self.root.winfo_screenwidth()
-        window_width = int(screen_width * 0.8)  # 80% of screen width
-
         # Waveforms live in the separate GPU window now; the tk window only holds
-        # controls + tune panel + deck info labels, so it can be short.
-        window_height = 50 + (self.deck_count * 26) + 20
-
-        self.root.geometry(f"{window_width}x{window_height}")
+        # the compact controls + (optional) tune panel + deck info labels, so it
+        # sizes to its content (≈ tune-box width).
+        self._resize_to_content()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _resize_to_content(self) -> None:
+        """Shrink/grow the tk window to fit its current widgets."""
+        self.root.update_idletasks()
+        w = max(self.root.winfo_reqwidth(), 1)
+        h = max(self.root.winfo_reqheight(), 1)
+        self.root.geometry(f"{w}x{h}")
 
     def _create_gpu_window(self) -> None:
         """Create the standalone GPU waveform window and load any current tracks."""
@@ -236,6 +266,10 @@ class WaveformSyncApp:
             self.deck_count,
             size=(win_w, win_h),
             background=bg,
+            beat_color=tuple(self.color_cfg.beat_color),
+            beat_end_color=tuple(self.color_cfg.beat_end_color),
+            beat_width=self.render_cfg.beat_width,
+            beat_triangles=self.render_cfg.beat_triangles,
             borderless=not self.gpu_border_var.get(),
             always_on_top=self.gpu_on_top_var.get(),
             on_close=self._on_gpu_window_closed,
@@ -279,7 +313,16 @@ class WaveformSyncApp:
             except Exception as e:
                 print(f"[Config] Failed to load config: {e}")
         self._sync_tuning_vars_from_config()
-    
+        self._sync_visual_vars_from_config()
+
+    def _sync_visual_vars_from_config(self) -> None:
+        """Sync the visual-mode toggles + beat-grid style vars from current config."""
+        self.overview_var.set(self.color_cfg.overview_mode)
+        self.stack_bands_var.set(self.color_cfg.stack_bands)
+        self.rgb_var.set(getattr(self.color_cfg, "rgb_mode", True))
+        self.beat_width_var.set(self.render_cfg.beat_width)
+        self.beat_triangles_var.set(self.render_cfg.beat_triangles)
+
     def _build_ui(self) -> None:
         self.root.configure(bg="black")
         
@@ -290,104 +333,78 @@ class WaveformSyncApp:
         style.configure("Tune.TFrame", background="#1a1a1a")
         style.configure("Tune.TLabel", background="#1a1a1a", foreground="white")
         style.configure("Tune.TButton", background="#333333")
+        style.configure("Tune.TCheckbutton", background="#1a1a1a", foreground="white")
+        style.map("Tune.TCheckbutton", background=[("active", "#1a1a1a")])
         
         main = ttk.Frame(self.root, style="Black.TFrame")
         main.pack(fill="both", expand=True, padx=2, pady=2)
         main.columnconfigure(1, weight=1)  # Waveform area expands
         main.rowconfigure(1, weight=1)  # Content area expands
         
-        # Top controls (spans both columns)
+        # Top controls (spans both columns). Compact multi-row layout (~tune width):
+        #   row0: Zoom slider + Decks    row1: Overview / Stack / RGB
+        #   row2: Beat Grid / On Top / Border   row3: Tune / Load / Save
         controls = ttk.Frame(main)
         controls.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        
-        tune_btn = ttk.Button(controls, text="Tune", command=self._toggle_tune_panel)
-        tune_btn.pack(side="left", padx=(0, 8))
-        ToolTip(tune_btn, "Open/close tuning panel for smoothing, gains, and render mode")
-        
-        load_btn = ttk.Button(controls, text="Load Config", command=self._on_load_config)
-        load_btn.pack(side="left", padx=(0, 2))
-        ToolTip(load_btn, "Load waveform color/render settings from a JSON file")
-        
-        save_btn = ttk.Button(controls, text="Save Config", command=self._on_save_config)
-        save_btn.pack(side="left", padx=(0, 8))
-        ToolTip(save_btn, "Save current waveform settings to a JSON file")
-        
-        overview_cb = ttk.Checkbutton(
-            controls,
-            text="Overview Mode",
-            variable=self.overview_var,
-            command=self._on_visual_change,
-        )
-        overview_cb.pack(side="left", padx=(0, 8))
-        ToolTip(overview_cb, "Rekordbox-style overview, band order adjustable h)")
-        
-        stack_cb = ttk.Checkbutton(
-            controls,
-            text="Stack Bands",
-            variable=self.stack_bands_var,
-            command=self._on_visual_change,
-        )
-        stack_cb.pack(side="left", padx=(0, 8))
-        ToolTip(stack_cb, "Show each band in its own horizontal lane")
 
-        rgb_cb = ttk.Checkbutton(
-            controls,
-            text="RGB",
-            variable=self.rgb_var,
-            command=self._on_visual_change,
-        )
-        rgb_cb.pack(side="left", padx=(0, 8))
-        ToolTip(rgb_cb, "Single waveform coloured by per-column band blend (rekordbox-style RGB)")
-        
-        beatgrid_cb = ttk.Checkbutton(
-            controls,
-            text="Beat Grid",
-            variable=self.beat_grid_var,
-            command=self._on_visual_change,
-        )
-        beatgrid_cb.pack(side="left", padx=(0, 8))
-        ToolTip(beatgrid_cb, "Show downbeat markers (bar boundaries) on the waveform")
-
-        ontop_cb = ttk.Checkbutton(
-            controls,
-            text="On Top",
-            variable=self.gpu_on_top_var,
-            command=self._on_gpu_window_opts,
-        )
-        ontop_cb.pack(side="left", padx=(0, 8))
-        ToolTip(ontop_cb, "Keep the waveform window above other windows")
-
-        border_cb = ttk.Checkbutton(
-            controls,
-            text="Border",
-            variable=self.gpu_border_var,
-            command=self._on_gpu_window_opts,
-        )
-        border_cb.pack(side="left", padx=(0, 8))
-        ToolTip(border_cb, "Show the window border (needed to move/resize); off = clean overlay")
-        
-        ttk.Label(controls, text="Zoom:").pack(side="left", padx=(8, 4))
+        r0 = ttk.Frame(controls)
+        r0.pack(fill="x", pady=1)
+        ttk.Label(r0, text="Zoom:").pack(side="left", padx=(0, 4))
         zoom_slider = ttk.Scale(
-            controls,
-            from_=0,
-            to=NUM_ZOOM_STEPS,
-            orient="horizontal",
-            variable=self.zoom_var,
-            command=lambda _v: self._on_zoom_change(),
+            r0, from_=0, to=NUM_ZOOM_STEPS, orient="horizontal",
+            variable=self.zoom_var, command=lambda _v: self._on_zoom_change(),
         )
+        zoom_slider.configure(length=110)
         zoom_slider.pack(side="left", padx=(0, 8))
-        zoom_slider.configure(length=150)
-        ToolTip(zoom_slider, "Visible time window: left=0.5s (zoomed in), right=120s (zoomed out)")
-
-        ttk.Label(controls, text="Decks:").pack(side="left", padx=(8, 4))
+        ToolTip(zoom_slider, "Visible time window: left=zoomed out, right=zoomed in\nNumpad +/- also zoom while Rekordbox is focused")
+        ttk.Label(r0, text="Decks:").pack(side="left", padx=(0, 4))
         self.deck_count_var = tk.StringVar(value=str(self.deck_count))
-        deck_combo = ttk.Combobox(controls, textvariable=self.deck_count_var, values=["2", "4"], width=3, state="readonly")
-        deck_combo.pack(side="left", padx=(0, 8))
+        deck_combo = ttk.Combobox(r0, textvariable=self.deck_count_var, values=["2", "4"], width=3, state="readonly")
+        deck_combo.pack(side="left")
         deck_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_deck_count_change())
-        ToolTip(deck_combo, "Number of active decks (restarts rkbx_link)")
+        ToolTip(deck_combo, "Number of active decks (restarts the memory reader)")
 
-        ttk.Label(controls, textvariable=self.link_status_var).pack(side="right")
-        
+        r1 = ttk.Frame(controls)
+        r1.pack(fill="x", pady=1)
+        overview_cb = ttk.Checkbutton(r1, text="Overview", variable=self.overview_var, command=self._on_visual_change)
+        overview_cb.pack(side="left", padx=(0, 6))
+        ToolTip(overview_cb, "Rekordbox-style overview, band order adjustable")
+        stack_cb = ttk.Checkbutton(r1, text="Stack", variable=self.stack_bands_var, command=self._on_visual_change)
+        stack_cb.pack(side="left", padx=(0, 6))
+        ToolTip(stack_cb, "Show each band in its own horizontal lane")
+        rgb_cb = ttk.Checkbutton(r1, text="RGB", variable=self.rgb_var, command=self._on_visual_change)
+        rgb_cb.pack(side="left", padx=(0, 6))
+        ToolTip(rgb_cb, "Single waveform coloured by per-column band blend (rekordbox-style RGB)")
+
+        r2 = ttk.Frame(controls)
+        r2.pack(fill="x", pady=1)
+        beatgrid_cb = ttk.Checkbutton(r2, text="Beat Grid", variable=self.beat_grid_var, command=self._on_visual_change)
+        beatgrid_cb.pack(side="left", padx=(0, 6))
+        ToolTip(beatgrid_cb, "Show downbeat markers (bar boundaries) on the waveform")
+        cues_cb = ttk.Checkbutton(r2, text="Cues", variable=self.cue_var, command=self._on_visual_change)
+        cues_cb.pack(side="left", padx=(0, 6))
+        ToolTip(cues_cb, "Show hot cues + memory cues (from the Rekordbox DB, or a USB stick's ANLZ files)")
+        ontop_cb = ttk.Checkbutton(r2, text="On Top", variable=self.gpu_on_top_var, command=self._on_gpu_window_opts)
+        ontop_cb.pack(side="left", padx=(0, 6))
+        ToolTip(ontop_cb, "Keep the waveform window above other windows")
+        border_cb = ttk.Checkbutton(r2, text="Border", variable=self.gpu_border_var, command=self._on_gpu_window_opts)
+        border_cb.pack(side="left", padx=(0, 6))
+        ToolTip(border_cb, "Show the window border (needed to move/resize); off = clean overlay")
+
+        r3 = ttk.Frame(controls)
+        r3.pack(fill="x", pady=1)
+        tune_btn = ttk.Button(r3, text="Tune", width=7, command=self._toggle_tune_panel)
+        tune_btn.pack(side="left", padx=(0, 4))
+        ToolTip(tune_btn, "Open/close tuning panel for smoothing, gains, and beat grid")
+        load_btn = ttk.Button(r3, text="Load", width=7, command=self._on_load_config)
+        load_btn.pack(side="left", padx=(0, 4))
+        ToolTip(load_btn, "Load waveform color/render settings from a JSON file")
+        save_btn = ttk.Button(r3, text="Save", width=7, command=self._on_save_config)
+        save_btn.pack(side="left")
+        ToolTip(save_btn, "Save current waveform settings to a JSON file")
+
+        ttk.Label(controls, textvariable=self.link_status_var).pack(anchor="w", pady=(4, 0))
+
         # Tuning panel (left side, collapsible)
         self.tune_panel = ttk.Frame(main, style="Tune.TFrame", width=200)
         # Don't grid it yet - will be shown/hidden by toggle
@@ -417,6 +434,16 @@ class WaveformSyncApp:
 
         # (Render Mode dropdown removed: the GPU sizes textures by zoom now, so the
         # old fixed render-height/interpolation modes no longer affect the display.)
+
+        # Zoom (shares zoom_var with the main slider + numpad hotkey)
+        ttk.Label(panel, text="Zoom:", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        zoom_scale = ttk.Scale(
+            panel, from_=0, to=NUM_ZOOM_STEPS, orient="horizontal",
+            variable=self.zoom_var, length=100, command=lambda _v: self._on_zoom_change(),
+        )
+        zoom_scale.grid(row=row, column=1, sticky="w", padx=8, pady=2)
+        ToolTip(zoom_scale, "Visible time window (also numpad +/-): left=zoomed out, right=zoomed in")
+        row += 1
 
         # Band Order (3-band only)
         ttk.Label(panel, text="Band Order (3):", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=2)
@@ -503,11 +530,81 @@ class WaveformSyncApp:
         high_scale.bind("<B1-Motion>", lambda e: self._on_gain_change())  # Live update while dragging
         ToolTip(high_scale, "High frequency band amplitude multiplier (0–3×)")
         row += 1
-        
+
         # Separator
         ttk.Separator(panel, orient="horizontal").grid(row=row, column=0, columnspan=2, sticky="ew", padx=8, pady=8)
         row += 1
-        
+
+        # --- Beat grid section ---
+        ttk.Label(panel, text="Beat Grid", style="Tune.TLabel", font=("TkDefaultFont", 9, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4)
+        )
+        row += 1
+
+        ttk.Label(panel, text="Width:", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=1)
+        beat_width_scale = ttk.Scale(panel, from_=1.0, to=8.0, orient="horizontal", variable=self.beat_width_var, length=100)
+        beat_width_scale.grid(row=row, column=1, sticky="w", padx=8, pady=1)
+        beat_width_scale.bind("<ButtonRelease-1>", lambda e: self._on_beat_style_change())
+        beat_width_scale.bind("<B1-Motion>", lambda e: self._on_beat_style_change())
+        ToolTip(beat_width_scale, "Thickness of each beat-grid line, in pixels")
+        row += 1
+
+        ttk.Label(panel, text="Color:", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        self._beat_color_btn = tk.Button(panel, text=" ", width=3, relief="raised", command=self._on_pick_beat_color)
+        self._beat_color_btn.grid(row=row, column=1, sticky="w", padx=8, pady=2)
+        ToolTip(self._beat_color_btn, "Beat-grid line colour (click to change)")
+        self._update_beat_color_button()
+        row += 1
+
+        markers_cb = ttk.Checkbutton(
+            panel, text="Beat End Markers", variable=self.beat_triangles_var,
+            command=self._on_beat_style_change, style="Tune.TCheckbutton",
+        )
+        markers_cb.grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=1)
+        ToolTip(markers_cb, "Draw Rekordbox-style triangle markers at the top and bottom of each beat line")
+        row += 1
+
+        ttk.Label(panel, text="Marker Color:", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=2)
+        self._beat_end_color_btn = tk.Button(panel, text=" ", width=3, relief="raised", command=self._on_pick_beat_end_color)
+        self._beat_end_color_btn.grid(row=row, column=1, sticky="w", padx=8, pady=2)
+        ToolTip(self._beat_end_color_btn, "Beat end-marker (triangle) colour, independent of the line (click to change)")
+        self._update_beat_end_color_button()
+        row += 1
+
+        # Separator
+        ttk.Separator(panel, orient="horizontal").grid(row=row, column=0, columnspan=2, sticky="ew", padx=8, pady=8)
+        row += 1
+
+        # --- Zoom keys (global hotkeys, work while Rekordbox is focused) ---
+        ttk.Label(panel, text="Zoom Keys", style="Tune.TLabel", font=("TkDefaultFont", 9, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4)
+        )
+        row += 1
+
+        enable_cb = ttk.Checkbutton(
+            panel, text="Enabled", variable=self.numpad_zoom_var, style="Tune.TCheckbutton",
+        )
+        enable_cb.grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=1)
+        ToolTip(enable_cb, "Zoom with the assigned keys even while Rekordbox is in the foreground")
+        row += 1
+
+        ttk.Label(panel, text="Zoom In:", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=1)
+        self._zoom_in_key_btn = ttk.Button(panel, width=10, command=lambda: self._capture_zoom_key("in"))
+        self._zoom_in_key_btn.grid(row=row, column=1, sticky="w", padx=8, pady=1)
+        ToolTip(self._zoom_in_key_btn, "Click, then press a key to assign (default numpad +)")
+        row += 1
+
+        ttk.Label(panel, text="Zoom Out:", style="Tune.TLabel").grid(row=row, column=0, sticky="w", padx=8, pady=1)
+        self._zoom_out_key_btn = ttk.Button(panel, width=10, command=lambda: self._capture_zoom_key("out"))
+        self._zoom_out_key_btn.grid(row=row, column=1, sticky="w", padx=8, pady=1)
+        ToolTip(self._zoom_out_key_btn, "Click, then press a key to assign (default numpad -)")
+        row += 1
+        self._update_zoom_key_buttons()
+
+        # Separator
+        ttk.Separator(panel, orient="horizontal").grid(row=row, column=0, columnspan=2, sticky="ew", padx=8, pady=8)
+        row += 1
+
         # (Load/Save buttons moved to main controls row)
     
     def _toggle_tune_panel(self) -> None:
@@ -519,6 +616,7 @@ class WaveformSyncApp:
             self.tune_panel.grid(row=1, column=0, sticky="ns", padx=(0, 8))
             self.tune_panel_visible.set(True)
             self._sync_tuning_vars_from_config()
+        self._resize_to_content()
     
     def _sync_tuning_vars_from_config(self) -> None:
         """Sync tuning panel variables from current config."""
@@ -640,10 +738,12 @@ class WaveformSyncApp:
                 print(f"[Config] Failed to update last_config.txt: {e}")
             # Sync tuning panel variables
             self._sync_tuning_vars_from_config()
-            self.overview_var.set(self.color_cfg.overview_mode)
-            self.stack_bands_var.set(self.color_cfg.stack_bands)
-            self.rgb_var.set(getattr(self.color_cfg, "rgb_mode", False))
+            self._sync_visual_vars_from_config()
             self._update_rgb_color_buttons()
+            self._update_beat_color_button()
+            self._update_beat_end_color_button()
+            self._update_zoom_key_buttons()
+            self._apply_beat_style()
             self._invalidate_caches_and_render()
             messagebox.showinfo("Success", f"Configuration loaded from:\n{file_path}")
         except Exception as e:
@@ -670,6 +770,58 @@ class WaveformSyncApp:
         setattr(self.color_cfg, attr, tuple(int(c) for c in rgb))
         self._update_rgb_color_buttons()
         self._invalidate_caches_and_render()
+
+    # ------------------------------------------------------------------
+    # Beat grid style (live overlay — no texture rebuild needed)
+    # ------------------------------------------------------------------
+    def _update_beat_color_button(self) -> None:
+        btn = getattr(self, "_beat_color_btn", None)
+        if btn is None:
+            return
+        r, g, b = self.color_cfg.beat_color
+        hexc = f"#{int(r):02x}{int(g):02x}{int(b):02x}"
+        fg = "#000000" if (r + g + b) > 384 else "#ffffff"
+        btn.configure(bg=hexc, activebackground=hexc, fg=fg)
+
+    def _on_pick_beat_color(self) -> None:
+        rgb, _hex = colorchooser.askcolor(color=self.color_cfg.beat_color, title="Beat grid color")
+        if rgb is None:
+            return
+        self.color_cfg.beat_color = tuple(int(c) for c in rgb)
+        self._update_beat_color_button()
+        self._apply_beat_style()
+
+    def _update_beat_end_color_button(self) -> None:
+        btn = getattr(self, "_beat_end_color_btn", None)
+        if btn is None:
+            return
+        r, g, b = self.color_cfg.beat_end_color
+        hexc = f"#{int(r):02x}{int(g):02x}{int(b):02x}"
+        fg = "#000000" if (r + g + b) > 384 else "#ffffff"
+        btn.configure(bg=hexc, activebackground=hexc, fg=fg)
+
+    def _on_pick_beat_end_color(self) -> None:
+        rgb, _hex = colorchooser.askcolor(color=self.color_cfg.beat_end_color, title="Beat end marker color")
+        if rgb is None:
+            return
+        self.color_cfg.beat_end_color = tuple(int(c) for c in rgb)
+        self._update_beat_end_color_button()
+        self._apply_beat_style()
+
+    def _on_beat_style_change(self) -> None:
+        self.render_cfg.beat_width = float(self.beat_width_var.get())
+        self.render_cfg.beat_triangles = bool(self.beat_triangles_var.get())
+        self._apply_beat_style()
+
+    def _apply_beat_style(self) -> None:
+        if self.gpu is None:
+            return
+        self.gpu.set_beat_style(
+            color=tuple(self.color_cfg.beat_color),
+            end_color=tuple(self.color_cfg.beat_end_color),
+            width=self.render_cfg.beat_width,
+            triangles=self.render_cfg.beat_triangles,
+        )
 
     def _on_visual_change(self) -> None:
         """Handle overview/stack/RGB mode toggle."""
@@ -741,7 +893,8 @@ class WaveformSyncApp:
             return
         image, pps_out, total_out = result
         downbeats = deck.get_downbeat_times() if self.beat_grid_var.get() else ()
-        self.gpu.set_track(deck_num, image, pps_out, total_out, downbeats_sec=downbeats)
+        cues = deck.get_cue_markers() if self.cue_var.get() else ()
+        self.gpu.set_track(deck_num, image, pps_out, total_out, downbeats_sec=downbeats, cues=cues)
 
     def _on_deck_count_change(self) -> None:
         new_count = int(self.deck_count_var.get())
@@ -809,6 +962,10 @@ class WaveformSyncApp:
             count,
             size=(win_w, win_h),
             background=bg,
+            beat_color=tuple(self.color_cfg.beat_color),
+            beat_end_color=tuple(self.color_cfg.beat_end_color),
+            beat_width=self.render_cfg.beat_width,
+            beat_triangles=self.render_cfg.beat_triangles,
             borderless=not self.gpu_border_var.get(),
             always_on_top=self.gpu_on_top_var.get(),
             on_close=self._on_gpu_window_closed,
@@ -848,6 +1005,8 @@ class WaveformSyncApp:
             return
         # 1b) rebuild textures if the window was resized (debounced)
         self._maybe_rebuild_on_resize()
+        # 1c) global numpad +/- zoom (works while Rekordbox has focus)
+        self._poll_zoom_hotkey()
         # 2) drain all pending link events into deck state (cheap, no drawing)
         if self.link_listener is not None:
             while True:
@@ -865,6 +1024,57 @@ class WaveformSyncApp:
                 status = "RB Memory: connected" if self.link_listener.connected else "RB Memory: waiting..."
                 self.link_status_var.set(status)
         self._tick_job = self.root.after(GPU_TICK_MS, self._tick)
+
+    def _poll_zoom_hotkey(self) -> None:
+        """Global zoom hotkeys, polled so they work even when the GPU window /
+        Rekordbox has focus (the tk window need not be focused). Edge-triggered.
+        Keys come from config (default numpad + / -)."""
+        if not self.numpad_zoom_var.get():
+            return
+        try:
+            gks = ctypes.windll.user32.GetAsyncKeyState
+        except Exception:
+            return
+        in_down = bool(gks(self.render_cfg.zoom_in_key) & 0x8000)
+        out_down = bool(gks(self.render_cfg.zoom_out_key) & 0x8000)
+        if in_down and not self._zoom_key_down["in"]:
+            self._nudge_zoom(+1)   # zoom in
+        if out_down and not self._zoom_key_down["out"]:
+            self._nudge_zoom(-1)   # zoom out
+        self._zoom_key_down["in"] = in_down
+        self._zoom_key_down["out"] = out_down
+
+    def _update_zoom_key_buttons(self) -> None:
+        if hasattr(self, "_zoom_in_key_btn"):
+            self._zoom_in_key_btn.configure(text=_vk_label(self.render_cfg.zoom_in_key))
+        if hasattr(self, "_zoom_out_key_btn"):
+            self._zoom_out_key_btn.configure(text=_vk_label(self.render_cfg.zoom_out_key))
+
+    def _capture_zoom_key(self, which: str) -> None:
+        """Capture the next key press and assign it as a zoom hotkey. On Windows,
+        tk's event.keycode is the Windows virtual-key code GetAsyncKeyState uses."""
+        btn = self._zoom_in_key_btn if which == "in" else self._zoom_out_key_btn
+        btn.configure(text="press key…")
+
+        def on_key(ev):
+            self.root.unbind("<KeyPress>")
+            vk = int(ev.keycode)
+            if which == "in":
+                self.render_cfg.zoom_in_key = vk
+            else:
+                self.render_cfg.zoom_out_key = vk
+            self._update_zoom_key_buttons()
+
+        self.root.bind("<KeyPress>", on_key)
+        self.root.focus_force()
+
+    def _nudge_zoom(self, delta: int) -> None:
+        """Step the zoom level by `delta` (clamped) and rebuild textures."""
+        cur = int(round(self.zoom_var.get()))
+        step = max(0, min(NUM_ZOOM_STEPS, cur + delta))
+        if step != cur:
+            self.zoom_var.set(step)
+            self._on_zoom_change()
 
     def _render_gpu_frame(self) -> None:
         zoom_step = int(max(0, min(NUM_ZOOM_STEPS, self.zoom_var.get())))
