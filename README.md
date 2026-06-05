@@ -36,8 +36,6 @@ scrolling waveform window follows your decks live.
 
 ## Installation
 
-You don't need any coding experience — just copy/paste the commands below.
-
 **1. Open a terminal** (press <kbd>Win</kbd>, type **PowerShell**, hit Enter).
 
 **2. (Recommended) Create a private environment** so this doesn't touch the rest
@@ -119,7 +117,7 @@ own profile — the last one you load is reopened automatically next time.
 ## Other Rekordbox versions
 
 The app finds the right memory layout by detecting your Rekordbox version and
-looking it up in `rb_waveform_core/data/offsets`. Version **7.2.2** ships built-in.
+looking it up in `rb_waveform_core/data/offsets`. Version **7.2.2** & **7.2.14** ships built-in.
 If you run a different version and cues/positions don't show, a helper tool in
 [`rb_offset_detect/`](rb_offset_detect/) walks you through detecting the offsets
 for your version and appending them to that file.
@@ -128,7 +126,7 @@ for your version and appending them to that file.
 
 **Status stays on “RB Memory: waiting…”**
 - Make sure Rekordbox is actually running.
-- Confirm your Rekordbox version matches an entry in the offsets file (7.2.2 by default).
+- Confirm your Rekordbox version matches an entry in the offsets file, else you need to create new offsets
 
 **No waveform / no track loaded**
 - Load a track onto a deck in Rekordbox first.
